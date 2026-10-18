@@ -1,83 +1,58 @@
 @echo off
+setlocal
 REM EDAPGui Startup Script
-REM Creates Python venv with 3.11/3.10/3.9 (whichever is available) and runs EDAPGui
+REM Creates a Python venv (prefers 3.11, then 3.10, 3.9, then any) on first start and runs EDAPGui.
+cd /d "%~dp0"
 
-REM Check if venv exists
+REM Setup is complete when the marker file exists (a previous aborted setup is redone)
+if exist "venv\.setup_complete" goto run
+
+set "PYTHON_CMD="
+py -3.11 --version >nul 2>&1 && set "PYTHON_CMD=py -3.11" && goto found
+py -3.10 --version >nul 2>&1 && set "PYTHON_CMD=py -3.10" && goto found
+py -3.9 --version >nul 2>&1 && set "PYTHON_CMD=py -3.9" && goto found
+py --version >nul 2>&1 && set "PYTHON_CMD=py" && goto found
+python --version >nul 2>&1 && set "PYTHON_CMD=python" && goto found
+
+echo Error: No Python installation found. Please install Python 3.11:
+echo     winget install -e --id Python.Python.3.11
+pause
+exit /b 1
+
+:found
+echo Using: %PYTHON_CMD%
+%PYTHON_CMD% --version
+
 if not exist "venv\Scripts\python.exe" (
-    echo Creating Python virtual environment...
-    echo This may take a moment, please wait...
-    
-    REM Try Python versions in order of preference: 3.11, 3.10, 3.9, then fallback
-    set PYTHON_CMD=
-    
-    REM Try py launcher with specific versions (Windows Python Launcher)
-    py -3.11 --version >nul 2>&1
-    if %errorlevel% == 0 (
-        set PYTHON_CMD=py -3.11
-        echo Found Python 3.11 via py launcher
-        goto create_venv
-    )
-    
-    py -3.10 --version >nul 2>&1
-    if %errorlevel% == 0 (
-        set PYTHON_CMD=py -3.10
-        echo Found Python 3.10 via py launcher
-        goto create_venv
-    )
-    
-    py -3.9 --version >nul 2>&1
-    if %errorlevel% == 0 (
-        set PYTHON_CMD=py -3.9
-        echo Found Python 3.9 via py launcher
-        goto create_venv
-    )
-    
-    REM Try py launcher with latest
-    py --version >nul 2>&1
-    if %errorlevel% == 0 (
-        for /f "tokens=2" %%i in ('py --version 2^>^&1') do (
-            echo Found Python %%i via py launcher
-            set PYTHON_CMD=py
-            goto create_venv
-        )
-    )
-    
-    REM Fallback to python command
-    python --version >nul 2>&1
-    if %errorlevel% == 0 (
-        for /f "tokens=2" %%i in ('python --version 2^>^&1') do (
-            echo Found Python %%i
-            set PYTHON_CMD=python
-            goto create_venv
-        )
-    )
-    
-    echo Error: No suitable Python installation found. Please install Python 3.9, 3.10, or 3.11.
+    echo Creating Python virtual environment, please wait...
+    %PYTHON_CMD% -m venv venv
+)
+if not exist "venv\Scripts\python.exe" (
+    echo Error: Failed to create virtual environment
     pause
     exit /b 1
-    
-    :create_venv
-    %PYTHON_CMD% -m venv venv
-    
-    if not exist "venv\Scripts\python.exe" (
-        echo Error: Failed to create virtual environment
-        pause
-        exit /b 1
-    )
-    
-    echo Installing requirements...
-    venv\Scripts\python -m pip install --upgrade pip
-    venv\Scripts\python -m pip install -r requirements.txt
-
-    if %errorlevel% neq 0 (
-        echo Error: Failed to install requirements
-        pause
-        exit /b 1
-    )
-    
-    echo Virtual environment setup complete!
 )
 
-REM Run EDAPGui with venv python
+echo Installing requirements, this can take several minutes...
+venv\Scripts\python.exe -m pip install --upgrade pip
+venv\Scripts\python.exe -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo.
+    echo Error: Failed to install requirements. See the messages above.
+    echo Tip: EDAP needs Python 3.11 ^(winget install -e --id Python.Python.3.11^),
+    echo      then delete the 'venv' folder and run this file again.
+    pause
+    exit /b 1
+)
+echo done> "venv\.setup_complete"
+echo Virtual environment setup complete!
+
+:run
 echo Starting EDAPGui...
 venv\Scripts\python.exe EDAPGui.py
+if errorlevel 1 (
+    echo.
+    echo EDAPGui exited with an error. See the messages above.
+    pause
+)
+endlocal
