@@ -1,3 +1,8 @@
+# 10/18/2026 v1.9.4 b11
+- Galaxy Map: opening waits on Status.json GuiFocus (fast) instead of 15 s OCR of 'CARTOGRAPHICS'.
+- Galaxy Map: waiting for the Nav Route no longer hangs forever (20 s timeout, max. 5 targets tried, CPU busy loop
+  removed). On failure a screenshot is saved to debug-output.
+
 # 10/18/2026 v1.9.4 b10
 - Fix: trading waited forever for market data when the commodities market could not be opened. The wait is now
   limited to 30 s; existing data of the same station is used, otherwise the trade at this station is skipped.

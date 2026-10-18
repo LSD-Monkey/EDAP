@@ -6,7 +6,10 @@ import os
 from EDAP_data import GuiFocusGalaxyMap
 from Screen_Regions import Quad, load_calibrated_regions
 from StatusParser import StatusParser
+import time
 from time import sleep
+
+import cv2
 from EDlogger import logger
 from pyautogui import typewrite
 
@@ -161,7 +164,14 @@ class EDGalaxyMap:
         sleep(0.05)
 
         correct_route = False
+        attempts = 0
         while not correct_route:
+            attempts += 1
+            if attempts > 5:
+                self._save_debug_screenshot('galmap_wrong_target')
+                self.ap_ckb('log+vce', f"Unable to plot a route to {target_name_uc} in the Galaxy Map.")
+                ap.keys.send('GalaxyMapOpen')
+                return False
             # Store the current nav route system
             last_nav_route_sys = ap.nav_route.get_last_system()
             last_nav_route_sys_uc = last_nav_route_sys.upper()
@@ -186,7 +196,16 @@ class EDGalaxyMap:
             # selected yet... otherwise we wait.  If long route, it may take a few seconds
             if ap.nav_route is not None:
                 logger.debug(f"Waiting for Nav Route to update.")
+                wait_start = time.time()
                 while 1:
+                    if time.time() - wait_start > 20:
+                        # Route was not plotted (search or plot did not work). Do not wait forever.
+                        self._save_debug_screenshot('galmap_no_route')
+                        self.ap_ckb('log+vce', f"No route plotted to {target_name_uc} (Galaxy Map). "
+                                               f"Screenshot saved in debug-output.")
+                        ap.keys.send('GalaxyMapOpen')
+                        return False
+                    sleep(0.5)
                     curr_nav_route_sys = ap.nav_route.get_last_system()
                     curr_nav_route_sys_uc = curr_nav_route_sys.upper()
                     # Check if the nav route has been changed (right or wrong)
@@ -226,6 +245,18 @@ class EDGalaxyMap:
             logger.warning("Error setting waypoint, breaking")
             return False
 
+    def _save_debug_screenshot(self, name: str):
+        """ Saves a screenshot to debug-output for analysing failures. """
+        try:
+            os.makedirs('debug-output', exist_ok=True)
+            image = self.screen.get_screen_full()
+            if image is not None:
+                fn = f"debug-output/{name}_{time.strftime('%Y%m%d-%H%M%S')}.png"
+                cv2.imwrite(fn, image)
+                logger.info(f"Saved debug screenshot {fn}")
+        except Exception as e:
+            logger.warning(f"Could not save debug screenshot: {e}")
+
     def goto_galaxy_map(self) -> bool:
         """Open Galaxy Map if we are not there. Waits for map to load. Selects the search bar.
         """
@@ -241,12 +272,15 @@ class EDGalaxyMap:
                 self.ap.overlay.overlay_quad_pct('system map', stn_svcs, (0, 255, 0), 2, 5)
                 self.ap.overlay.overlay_paint()
 
-            # Wait for screen to appear. The text is the same, regardless of language.
-            res = self.ocr.wait_for_text(self.ap, ["CARTOGRAPHICS"], self.reg['cartographics'], timeout=15)
+            # Wait for the map to open. Status.json GuiFocus is reliable and fast; the OCR check of the
+            # 'CARTOGRAPHICS' title depends on the calibration and only costs time if it fails.
+            if not self.status_parser.wait_for_gui_focus(GuiFocusGalaxyMap, timeout=10):
+                logger.warning("Unable to open Galaxy Map")
+                return False
+            res = self.ocr.wait_for_text(self.ap, ["CARTOGRAPHICS"], self.reg['cartographics'], timeout=3)
             if not res:
-                if not self.status_parser.wait_for_gui_focus(GuiFocusGalaxyMap, timeout=5):
-                    logger.warning("Unable to open Galaxy Map")
-                    return False
+                logger.debug("Galaxy Map open (GuiFocus), 'CARTOGRAPHICS' not confirmed by OCR")
+                sleep(1.5)  # Let the map finish loading before sending input
 
             self.keys.send('UI_Up')  # Go up to search bar
             return True
