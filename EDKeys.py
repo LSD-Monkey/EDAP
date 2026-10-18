@@ -4,7 +4,7 @@ import json
 from os import environ, listdir
 import os
 from os.path import getmtime, isfile, join
-from time import sleep
+from time import sleep, monotonic
 from typing import Any, final
 from xml.etree.ElementTree import parse
 
@@ -254,6 +254,17 @@ class EDKeys:
         logger.info(f'Latest keybindings file:{latest_bindings}')
         return latest_bindings
 
+    @staticmethod
+    def _sleep_responsive(duration: float):
+        """ Sleeps in small steps. A stop request is raised asynchronously into the AP thread and is only
+        delivered between Python statements, so one long sleep() would delay the stop by the whole hold time. """
+        end = monotonic() + duration
+        while True:
+            remaining = end - monotonic()
+            if remaining <= 0:
+                break
+            sleep(min(0.05, remaining))
+
     def has_binding(self, key_binding: str) -> bool:
         """ Returns True if the given ED binding has a usable keyboard key. """
         return self.keys.get(key_binding) is not None
@@ -305,23 +316,26 @@ class EDKeys:
 
                 PressKey(key['key'])
 
-            if state is None:
-                if hold:
-                    if hold > 0.0:
-                        sleep(hold)
-                else:
-                    if self.key_def_hold_time > 0.0:
-                        sleep(self.key_def_hold_time)
+            try:
+                if state is None:
+                    if hold:
+                        if hold > 0.0:
+                            self._sleep_responsive(hold)
+                    else:
+                        if self.key_def_hold_time > 0.0:
+                            sleep(self.key_def_hold_time)
 
-            if 'hold' in key:
-                sleep(0.1)
+                if 'hold' in key:
+                    sleep(0.1)
+            finally:
+                # Always release, also when a stop request (EDAP_Interrupt) arrives while the key is held.
+                # Otherwise the key would stay pressed in the game.
+                if state is None or state == 0:
+                    ReleaseKey(key['key'])
 
-            if state is None or state == 0:
-                ReleaseKey(key['key'])
-
-                for mod in key['mods']:
-                    sleep(self.key_mod_delay)
-                    ReleaseKey(mod)
+                    for mod in key['mods']:
+                        sleep(self.key_mod_delay)
+                        ReleaseKey(mod)
 
             if repeat_delay:
                 sleep(repeat_delay)

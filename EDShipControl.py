@@ -59,6 +59,28 @@ class EDShipControl:
         self.ap_ckb = cb
         self.status_parser = StatusParser()
 
+    # Max. time a single roll/pitch/yaw key is held. Ships need ~2-10 s for large angles, longer holds are
+    # the result of wrong (too low) rate values and would block EDAP for minutes.
+    MAX_HOLD_TIME = 15.0
+
+    def _limit_hold_time(self, htime: float, axis: str) -> float:
+        """ Limits the key hold time for one movement. """
+        if htime > self.MAX_HOLD_TIME:
+            self.ap_ckb('log', f"{axis}: calculated hold time {htime:.1f} s is too long, limited to "
+                               f"{self.MAX_HOLD_TIME:.0f} s. Check the ship's {axis} rates (calibration).")
+            return self.MAX_HOLD_TIME
+        return htime
+
+    def _tune_plausible(self, act_ang: float, demand_ang: float, axis: str) -> bool:
+        """ Auto-tune sanity check. If the ship moved less than 10 % of the demanded angle, the key press most
+        likely did not reach the game (window focus, admin rights, wrong binding). Learning a rate from that would
+        poison the ship config with tiny rates and very long hold times. """
+        if demand_ang > 2.0 and act_ang < 0.1 * demand_ang:
+            self.ap_ckb('log', f"Auto-tune: ship moved only {act_ang:.1f} of {demand_ang:.1f} deg ({axis}). "
+                               f"Not learning this value. Are the key presses reaching Elite (focus/admin rights)?")
+            return False
+        return True
+
     def add_to_roll_curve(self, angle: float, rate: float):
         """
         Add a point to the current curve of the current ship.
@@ -209,6 +231,7 @@ class EDShipControl:
                         htime = abs_deg / ratio_val
 
         # Check if we are rolling right or left and perform the movement.
+        htime = self._limit_hold_time(htime, 'Roll')
         if deg > 0.0:
             self.keys.send('RollRightButton', hold=htime)
         else:
@@ -231,7 +254,9 @@ class EDShipControl:
                 # Add angle and time to curve
                 act_ang = abs(cur_deg - off['roll'])
                 rate = act_ang / htime
-                if auto_tune:
+                if auto_tune and not self._tune_plausible(act_ang, abs_deg, 'roll'):
+                    pass  # Ship (almost) did not move, do not learn a wrong rate
+                elif auto_tune:
                     # Add a new point for the detected rate
                     self.add_to_roll_curve(act_ang, rate)
                     # Update the existing point as well
@@ -302,6 +327,7 @@ class EDShipControl:
                         htime = abs_deg / ratio_val
 
         # Check if we are pitching up or down and perform the movement.
+        htime = self._limit_hold_time(htime, 'Pitch')
         if deg > 0.0:
             self.keys.send('PitchUpButton', hold=htime)
         else:
@@ -324,7 +350,9 @@ class EDShipControl:
                 # Add angle and time to curve
                 act_ang = abs(cur_deg - off['pit'])
                 rate = act_ang / htime
-                if auto_tune:
+                if auto_tune and not self._tune_plausible(act_ang, abs_deg, 'pit'):
+                    pass  # Ship (almost) did not move, do not learn a wrong rate
+                elif auto_tune:
                     # Add a new point for the detected rate
                     self.add_to_pitch_curve(act_ang, rate)
                     # Update the existing point as well
@@ -395,6 +423,7 @@ class EDShipControl:
                         htime = abs_deg / ratio_val
 
         # Check if we are yawing right or left and perform the movement.
+        htime = self._limit_hold_time(htime, 'Yaw')
         if deg > 0.0:
             self.keys.send('YawRightButton', hold=htime)
         else:
@@ -418,7 +447,9 @@ class EDShipControl:
                 # Add angle and time to curve
                 act_ang = abs(cur_deg - off['yaw'])
                 rate = act_ang / htime
-                if auto_tune:
+                if auto_tune and not self._tune_plausible(act_ang, abs_deg, 'yaw'):
+                    pass  # Ship (almost) did not move, do not learn a wrong rate
+                elif auto_tune:
                     # Add a new point for the detected rate
                     self.add_to_yaw_curve(act_ang, rate)
                     # Update the existing point as well

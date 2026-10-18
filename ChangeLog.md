@@ -1,3 +1,10 @@
+# 10/18/2026 v1.9.4 b3
+- Fix: stopping an assist while a key is held (e.g. a long pitch) took until the hold time ended (up to minutes).
+  Key holds are now interruptible and the key is always released.
+- Roll/pitch/yaw key holds are limited to 15 s per movement.
+- Auto-tune no longer learns a rate when the ship (almost) did not move. This happened when key presses did not
+  reach the game and produced tiny rates and hold times of several minutes.
+
 # 10/18/2026 v1.9.4 b2
 - Fix: the engine thread could die silently when a stop request (EDAP_Interrupt) or an error occurred outside of an
   assist's try/except (e.g. during clean-up). Afterwards EDAP ignored all assist starts until restarted. Every engine
