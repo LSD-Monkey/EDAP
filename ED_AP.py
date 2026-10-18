@@ -33,7 +33,7 @@ from EDafk_combat import AFK_Combat
 from EDInternalStatusPanel import EDInternalStatusPanel
 from NavRouteParser import NavRouteParser
 from OCR import OCR
-from EDNavigationPanel import EDNavigationPanel
+from EDNavigationPanel import EDNavigationPanel, destination_names_match
 from Overlay import *
 from StatusParser import StatusParser
 from Voice import *
@@ -61,6 +61,12 @@ class ScTargetAlignReturn(Enum):
     Lost = 1
     Found = 2
     Disengage = 3
+
+
+class SCAssistResult(Enum):
+    Arrived = 0  # Dropped out of supercruise at the destination
+    Reengage = 1  # In-game SC Assist needs to be activated again
+    Failed = 2  # Dropped elsewhere, destination changed or timeout
 
 
 class FSDAssistReturn(Enum):
@@ -368,6 +374,9 @@ class EDAutopilot:
             "PlanetDepartureSCOTime": 5.0,  # SCO boost time when leaving planet in secs
             "FleetCarrierMonitorCAPIDataPath": "",  # EDMC Fleet Carrier Monitor plugin data export path
             "AutoTuneRPYRates": False,  # Enable auto-tune for RPY rates.
+            "SCAssistTimeout": 3600,  # In-game SC Assist: max. time in secs to reach the destination (0 = no limit)
+            "SCAssistAlignBeforeActivate": True,  # In-game SC Assist: lock and compass align before activation
+            "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
         # a default value or an error will occur reading the new value!
@@ -440,6 +449,12 @@ class EDAutopilot:
                 cnf['FleetCarrierMonitorCAPIDataPath'] = ""
             if 'AutoTuneRPYRates' not in cnf:
                 cnf['AutoTuneRPYRates'] = ""
+            if 'SCAssistTimeout' not in cnf:
+                cnf['SCAssistTimeout'] = 3600
+            if 'SCAssistAlignBeforeActivate' not in cnf:
+                cnf['SCAssistAlignBeforeActivate'] = True
+            if 'SCAssistCheckActiveOCR' not in cnf:
+                cnf['SCAssistCheckActiveOCR'] = True
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -2540,7 +2555,7 @@ class EDAutopilot:
         if self.have_destination(scr_reg):
             self.ap_ckb('log', " - Station: " + station_name)
             self.update_ap_status(f"SC to Station: {station_name}")
-            self.sc_assist(scr_reg)
+            self.sc_assist(scr_reg, dst_name=station_name)
         else:
             self.ap_ckb('log', f" - Could not target station: {station_name}")
             return False
@@ -2650,10 +2665,13 @@ class EDAutopilot:
             sleep(1)
             return FSDAssistReturn.Partial
 
-    def sc_assist(self, scr_reg, do_docking=True):
-        """ Supercruise Assist loop to travel to target in system and perform autodock.
+    def sc_assist_manual(self, scr_reg, do_docking=True):
+        """ EDAP steered Supercruise Assist (legacy). Keeps the ship aligned to the target using the compass and
+        target images until the 'PRESS TO DISENGAGE' message appears, then drops and optionally docks.
+        Used as fallback by sc_assist() when the ship has no Supercruise Assist module, or the destination
+        cannot be selected in the Nav Panel.
         """
-        logger.debug("Entered sc_assist")
+        logger.debug("Entered sc_assist_manual")
 
         # Goto cockpit view
         self.ship_control.goto_cockpit_view()
@@ -2736,40 +2754,283 @@ class EDAutopilot:
 
         # if no error, we must have gotten disengage
         if not align_failed and do_docking:
-            sleep(4)  # wait for the journal to catch up
-
-            # Check if this is a target we cannot dock at
-            skip_docking = False
-            if not self.jn.ship_state()['has_adv_dock_comp'] and not self.jn.ship_state()['has_std_dock_comp']:
-                self.ap_ckb('log', "Skipping docking. No Docking Computer fitted.")
-                skip_docking = True
-
-            if not self.jn.ship_state()['SupercruiseDestinationDrop_type'] is None:
-                if (self.jn.ship_state()['SupercruiseDestinationDrop_type'].startswith("$USS_Type")
-                        # Bulk Cruisers
-                        or "-class Cropper" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Hauler" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Reformatory" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Researcher" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Surveyor" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Traveller" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
-                        or "-class Tanker" in self.jn.ship_state()['SupercruiseDestinationDrop_type']):
-                    self.ap_ckb('log', "Skipping docking. No docking privilege at MegaShips.")
-                    skip_docking = True
-
-            if not skip_docking:
-                # go into docking sequence
-                self.dock()
-                self.ap_ckb('log+vce', "Docking complete, refueled, repaired and re-armed")
-                self.update_ap_status("Docking Complete")
-            else:
-                self.set_throttle_0()
+            self._sc_assist_arrival(do_docking=True)
         else:
             self.vce.say("Exiting Supercruise, setting throttle to zero")
             self.set_throttle_0()  # make sure we don't continue to land
             self.ap_ckb('log', "Supercruise dropped, terminating SC Assist")
 
         self.ap_ckb('log+vce', "Supercruise Assist complete")
+
+    def sc_assist(self, scr_reg, do_docking=True, dst_name: str | None = None):
+        """ Supercruise Assist using the in-game Supercruise Assist (SCA) module.
+
+        1. Leave the station/planet if required and enter supercruise.
+        2. Destination is dst_name (e.g. a waypoint station) or else the current in-game destination from
+           Status.json (Destination.Name).
+        3. Lock the destination if needed and roughly align to it with the compass (optional, see config
+           'SCAssistAlignBeforeActivate').
+        4. Activate the in-game SCA: Nav Panel > NAVIGATION > destination > SUPERCRUISE ASSIST.
+        5. Hands off: the game flies and drops us at the destination. EDAP sends no flight keys, it only monitors
+           journal/status (arrival, interdiction, timeout) and optionally checks for 'SUPERCRUISE ASSIST ACTIVE'.
+        6. Dock (optional).
+
+        Falls back to sc_assist_manual() if the ship has no SCA module or the destination cannot be selected.
+        @param scr_reg: Screen regions.
+        @param do_docking: Dock after arrival.
+        @param dst_name: Name of the destination as shown in the Nav Panel. If None, the current in-game
+        destination (Status.json) is used.
+        """
+        logger.debug("Entered sc_assist (in-game SCA)")
+
+        # Goto cockpit view
+        self.ship_control.goto_cockpit_view()
+
+        if not self.jn.ship_state()['has_supercruise_assist']:
+            self.ap_ckb('log', "No Supercruise Assist module fitted, using EDAP SC Assist.")
+            return self.sc_assist_manual(scr_reg, do_docking)
+
+        target = dst_name if dst_name else self.nav_panel.get_status_destination()
+        if not target:
+            self.ap_ckb('log', "Quiting SC Assist - No destination selected.")
+            logger.debug("Quiting sc_assist - no destination in Status.json")
+            return
+
+        self.ap_ckb('log+vce', f"Supercruise Assist to {target}")
+
+        # if we are starting the waypoint docked at a station or landed, we need to undock/takeoff first
+        if self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
+            self.update_overlay()
+            self.waypoint_undock_seq()
+
+        # Ensure we are in supercruise
+        self.sc_engage(False)
+        self.jn.ship_state()['interdicted'] = False
+
+        max_activations = 3
+        for activation in range(1, max_activations + 1):
+            res = self._sc_assist_ingame_engage(scr_reg, target)
+            if not res:
+                if activation == 1:
+                    self.ap_ckb('log', f"Unable to activate in-game Supercruise Assist for '{target}'. "
+                                       f"Using EDAP SC Assist.")
+                    return self.sc_assist_manual(scr_reg, do_docking)
+                else:
+                    self.set_throttle_0()
+                    self.ap_ckb('log+vce', "Unable to re-activate Supercruise Assist, terminating.")
+                    return
+
+            # Use the exact in-game name from now on (the given name may be partial or OCR-ish)
+            target = self.nav_panel.get_status_destination() or target
+
+            result = self._sc_assist_ingame_monitor(scr_reg, target)
+            if result == SCAssistResult.Arrived:
+                break
+            elif result == SCAssistResult.Reengage:
+                self.ap_ckb('log', "Re-activating Supercruise Assist.")
+                continue
+            else:  # Failed
+                self.vce.say("Exiting Supercruise, setting throttle to zero")
+                self.set_throttle_0()  # make sure we don't continue to land
+                self.ap_ckb('log', "Supercruise Assist terminated before reaching the destination.")
+                return
+        else:
+            self.set_throttle_0()
+            self.ap_ckb('log+vce', "Supercruise Assist failed too often, terminating.")
+            return
+
+        self._sc_assist_arrival(do_docking)
+        self.ap_ckb('log+vce', "Supercruise Assist complete")
+
+    def _sc_assist_ingame_engage(self, scr_reg, target: str) -> bool:
+        """ Locks and aligns to the target (optional) and activates the in-game Supercruise Assist.
+        Returns True if the SCA was activated (destination verified via Status.json). """
+        # The in-game SCA drops us out of supercruise by itself. EDAP must not press 'disengage' (the SCO
+        # monitoring would do that), otherwise the FSD would be charged again in normal space.
+        self.stop_sco_monitoring()
+
+        if self.config['SCAssistAlignBeforeActivate']:
+            # Lock the destination first (if not already), so the compass shows it and we can align.
+            if not self.nav_panel.destination_matches(target):
+                self.update_ap_status(f"Targeting: {target}")
+                if not self.nav_panel.lock_destination(target):
+                    return False
+                self.nav_panel.wait_for_destination(target, timeout=5.0)
+                sleep(3)  # Wait for compass to stop flashing blue
+
+            self.update_ap_status("Align")
+            self.set_throttle_50()  # Don't want the loop of shame
+            try:
+                self.compass_align(scr_reg)
+            except EDAP_Interrupt:
+                raise
+            except Exception as e:
+                # Not fatal, the in-game SCA turns the ship to the target by itself.
+                logger.warning(f"sc_assist: compass align failed: {e}")
+
+        self.update_ap_status("Activate SC Assist")
+        if not self.nav_panel.activate_supercruise_assist(target):
+            return False
+
+        self.ap_ckb('log', f"In-game Supercruise Assist activated for '{target}'.")
+        return True
+
+    def _sc_assist_ingame_monitor(self, scr_reg, target: str) -> SCAssistResult:
+        """ Monitors the in-game Supercruise Assist until we drop at the destination. Sends no flight keys.
+        Returns:
+            Arrived - dropped out of supercruise at the destination (or glide complete).
+            Reengage - SCA needs to be activated again (after interdiction or SCA not active).
+            Failed - dropped somewhere else, destination changed, or timeout.
+        """
+        self.update_ap_status(f"SC Assist to {target}")
+        self.jn.ship_state()['SupercruiseDestinationDrop_type'] = None
+
+        start_time = time.time()
+        timeout = self.config['SCAssistTimeout']
+        check_ocr = self.config['SCAssistCheckActiveOCR']
+        ocr_interval = 5.0
+        ocr_not_active_limit = 4  # 4 x 5 s = 20 s without the 'SUPERCRUISE ASSIST ACTIVE' text
+        last_ocr_time = time.time()  # First check after ocr_interval, the text needs time to appear
+        ocr_not_active_cnt = 0
+        ocr_confirmed = False
+
+        while True:
+            sleep(0.5)
+
+            # Gliding to a planetary target - wait to complete
+            if self.status.get_flag2(Flags2GlideMode):
+                logger.debug("sc_assist: gliding")
+                self.status.wait_for_flag2_off(Flags2GlideMode, 30)
+                return SCAssistResult.Arrived
+
+            in_sc = self.status.get_flag(FlagsSupercruise)
+            if not in_sc and self.jn.ship_state()['status'] == 'in_space':
+                drop_type = self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                if drop_type is not None:
+                    logger.debug(f"sc_assist: dropped at destination '{drop_type}'")
+                    return SCAssistResult.Arrived
+                # Journal may lag the status file slightly, give the drop event a moment
+                sleep(2)
+                if self.jn.ship_state()['SupercruiseDestinationDrop_type'] is not None:
+                    return SCAssistResult.Arrived
+                if self.jn.ship_state()['interdicted']:
+                    # Interdiction completed before we saw the status flag: escape and continue.
+                    self.ap_ckb('log+vce', "Interdicted, escaping.")
+                    self.set_throttle_100()
+                    self.status.wait_for_flag_on(FlagsFsdCooldown)
+                    while not self.status.wait_for_flag_off(FlagsFsdCooldown, timeout=1):
+                        self.keys.send('UseBoostJuice')
+                    self.sc_engage(True)
+                    self.jn.ship_state()['interdicted'] = False
+                    return SCAssistResult.Reengage
+                self.ap_ckb('log', "Dropped out of supercruise, but not at the destination.")
+                return SCAssistResult.Failed
+
+            # Interdiction - submit and escape, then re-activate the SCA
+            if self.status.get_flag(FlagsBeingInterdicted):
+                self.interdiction_check()
+                return SCAssistResult.Reengage
+
+            # Destination changed by the player (or the game)
+            cur_dest = self.nav_panel.get_status_destination()
+            if cur_dest and not destination_names_match(cur_dest, target):
+                self.ap_ckb('log', f"Destination changed to '{cur_dest}', terminating SC Assist.")
+                return SCAssistResult.Failed
+
+            # Optional OCR check of the 'SUPERCRUISE ASSIST ACTIVE' HUD text
+            if check_ocr and in_sc and (time.time() - last_ocr_time) >= ocr_interval:
+                last_ocr_time = time.time()
+                active = self.sc_assist_active_ocr(scr_reg)
+                if active is None:
+                    check_ocr = False  # Not supported (no locale text), stop checking
+                elif active:
+                    ocr_not_active_cnt = 0
+                    if not ocr_confirmed:
+                        ocr_confirmed = True
+                        self.ap_ckb('log', "Supercruise Assist active.")
+                else:
+                    ocr_not_active_cnt += 1
+                    if ocr_not_active_cnt >= ocr_not_active_limit:
+                        if ocr_confirmed:
+                            # Was active and is gone while still in SC, the SCA was switched off.
+                            self.ap_ckb('log', "'SUPERCRUISE ASSIST ACTIVE' no longer detected.")
+                            return SCAssistResult.Reengage
+                        else:
+                            # Never seen: most likely the 'sca_active' region is not calibrated for this
+                            # screen/ship. Do not re-activate blindly (a 2nd press could switch the SCA off).
+                            self.ap_ckb('log', "Could not confirm 'SUPERCRUISE ASSIST ACTIVE' via OCR. Check the "
+                                               "'sca_active' region calibration. Continuing without the check.")
+                            check_ocr = False
+
+            if 0 < timeout < (time.time() - start_time):
+                self.ap_ckb('log', f"SC Assist timeout ({timeout} s).")
+                return SCAssistResult.Failed
+
+    def sc_assist_active_ocr(self, scr_reg) -> bool | None:
+        """ Checks the HUD for the 'SUPERCRUISE ASSIST ACTIVE' text.
+        Returns True if found, False if not, None if the check is not possible (no locale text, not in cockpit
+        view). The region 'sca_active' can be calibrated like the other screen regions. """
+        msg = self.locale["SC_ASSIST_ACTIVE_MSG"]
+        if not msg or msg == '?':
+            return None
+        if self.status.get_gui_focus() != GuiFocusNoFocus:
+            return False
+
+        image = self.scr.get_screen_region(scr_reg.reg['sca_active']['rect'])
+        # TODO delete this line when COLOR_RGB2BGR is removed from get_screen()
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        sim_match = 0.5  # Similarity match 0.0 - 1.0 for 0% - 100%)
+        sim = 0.0
+        ocr_textlist = self.ocr.image_simple_ocr(image, 'sca_active')
+        if ocr_textlist is not None:
+            sim = self.ocr.string_similarity(msg, str(ocr_textlist))
+        logger.debug(f"SC Assist active similarity with {str(ocr_textlist)} is {sim}")
+
+        if self.debug_overlay:
+            abs_rect = scr_reg.reg['sca_active']['rect']
+            self.overlay.overlay_rect1('sca_active', abs_rect, (0, 255, 0), 2)
+            self.overlay.overlay_floating_text('sca_active', f'SCA: {str(ocr_textlist)} ({sim:.2f})',
+                                               abs_rect[0], abs_rect[1] - 25, (0, 255, 0))
+            self.overlay.overlay_paint()
+
+        return sim > sim_match
+
+    def _sc_assist_arrival(self, do_docking: bool):
+        """ Called after we dropped out of supercruise at the destination. Docks if requested and possible,
+        otherwise sets the throttle to zero. Shared by the in-game and the manual SC Assist. """
+        if not do_docking:
+            self.set_throttle_0()
+            return
+
+        sleep(4)  # wait for the journal to catch up
+
+        # Check if this is a target we cannot dock at
+        skip_docking = False
+        if not self.jn.ship_state()['has_adv_dock_comp'] and not self.jn.ship_state()['has_std_dock_comp']:
+            self.ap_ckb('log', "Skipping docking. No Docking Computer fitted.")
+            skip_docking = True
+
+        if not self.jn.ship_state()['SupercruiseDestinationDrop_type'] is None:
+            if (self.jn.ship_state()['SupercruiseDestinationDrop_type'].startswith("$USS_Type")
+                    # Bulk Cruisers
+                    or "-class Cropper" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Hauler" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Reformatory" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Researcher" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Surveyor" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Traveller" in self.jn.ship_state()['SupercruiseDestinationDrop_type']
+                    or "-class Tanker" in self.jn.ship_state()['SupercruiseDestinationDrop_type']):
+                self.ap_ckb('log', "Skipping docking. No docking privilege at MegaShips.")
+                skip_docking = True
+
+        if not skip_docking:
+            # go into docking sequence
+            self.dock()
+            self.ap_ckb('log+vce', "Docking complete, refueled, repaired and re-armed")
+            self.update_ap_status("Docking Complete")
+        else:
+            self.set_throttle_0()
 
     def robigo_assist(self):
         self.robigo.loop(self)

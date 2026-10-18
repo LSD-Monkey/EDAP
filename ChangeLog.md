@@ -1,3 +1,13 @@
+# 10/18/2026 v1.9.4 b1
+- SC Assist now uses the in-game Supercruise Assist module: selects the destination in the Nav Panel (waypoint station
+  or current Status.json destination), aligns, activates SUPERCRUISE ASSIST and lets the game fly. EDAP only monitors
+  (arrival, interdiction, destination change, timeout) and docks afterwards.
+- The previous EDAP steered SC Assist is kept as fallback (`sc_assist_manual`) for ships without the module.
+- Nav Panel opens with `FocusLeftPanel` if bound (no need for `UIFocus`/`HeadLookReset`).
+- New settings: SCAssistTimeout, SCAssistAlignBeforeActivate, SCAssistCheckActiveOCR.
+- New calibration region 'sca_active' and locale key SC_ASSIST_ACTIVE_MSG.
+- Added unit tests (test_SCAssist.py) that run without the game.
+
 # 6/13/2026 v1.9.3
 - Removed duplicate save all settings buttons.
 - Removed test rpy buttons.

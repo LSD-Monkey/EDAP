@@ -11,8 +11,10 @@ For the FSD Route Assist, you select your destination in the GalaxyMap and then 
 executing route assistance it will perform detailed system scanning (honk) when jumping into a system and optionally perform FSS scanning
 to determine if Earth, Water, or Ammonia type world is present.
 ## Supercruise assist
-The supercruise (SC) assistant (and not using ED's SC Assist which takes up a slot, for a piece of software?) 
-will keep you on target and when "TO DISENGAGE" is presented and will autodrop out of SC and perform autodocking with the targeted Station. <br>
+If the in-game Supercruise Assist (SCA) module is fitted, EDAP selects the destination in the Nav Panel, aligns, activates
+the game's SCA and lets the game fly to the destination, then performs autodocking with the targeted Station.
+Without the module EDAP keeps you on target itself and autodrops out of SC when "TO DISENGAGE" is presented.
+See [Supercruise Assist](docs/SupercruiseAssist.md). <br>
 ## Waypoint assist
 With Waypoint Assist you define the route in a file and this assist will jump to those waypoints.  If a Station is defined to dock at, the assistant will transition to SC Assist and
 dock with the station.  A early version of a trading capability is also included.<br>
@@ -257,7 +259,9 @@ The following keybindings are required by AP, so make sure a key is assigned to 
     fuel level goes down below a threshold  the sequence will stop at the Star until refueling is complete.  
     If refueling doesn't complete after 35 seconds it will abort and continue to next route point.  If fuel goes below 
     10% (configurable), the route assist will terminate
-* Supercruise Assist: will keep your ship pointed to target, you target can only be a station for
+* Supercruise Assist: with the in-game Supercruise Assist module fitted, EDAP activates the game's SCA via the Nav Panel
+    and lets the game fly to the destination (see docs/SupercruiseAssist.md). Without the module (or if the destination is
+    not found in the Nav Panel) EDAP's own SC Assist is used: it will keep your ship pointed to target, you target can only be a station for
     the autodocking to work.  If a settlement is targetted or target is obscured you will end up being kicked out of SC 
     via "Dropped Too Close" or "Dropping from Orbital Cruise" (however, no damage to ship), throttle will be set to
     Zero and exit SC Assist.  Otherwise, when the 'TO DISENGAGE' appears the SC Assist will drop you out of SC
