@@ -1,3 +1,10 @@
+# 10/18/2026 v1.9.4 b2
+- Fix: the engine thread could die silently when a stop request (EDAP_Interrupt) or an error occurred outside of an
+  assist's try/except (e.g. during clean-up). Afterwards EDAP ignored all assist starts until restarted. Every engine
+  loop iteration is now protected and errors are logged.
+- Uncaught exceptions in background threads are now written to autopilot.log (previously only to the console).
+- Fixed start_ed_ap.bat (python detection, aborted setup, window stays open on errors).
+
 # 10/18/2026 v1.9.4 b1
 - SC Assist now uses the in-game Supercruise Assist module: selects the destination in the Nav Panel (waypoint station
   or current Status.json destination), aligns, activates SUPERCRUISE ASSIST and lets the game fly. EDAP only monitors

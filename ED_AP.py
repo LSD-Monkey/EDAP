@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import traceback
 from math import atan, degrees, tan, radians
 import random
@@ -61,6 +62,15 @@ class ScTargetAlignReturn(Enum):
     Lost = 1
     Found = 2
     Disengage = 3
+
+
+def _log_thread_exception(args):
+    """ threading.excepthook: write uncaught thread exceptions to the log file. """
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread else '?'
+    logger.error(f"Uncaught exception in thread '{name}'",
+                 exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
 
 
 class SCAssistResult(Enum):
@@ -250,6 +260,8 @@ class EDAutopilot:
         # start the engine thread
         self.terminate = False  # terminate used by the thread to exit its loop
         if do_thread:
+            # Log crashes of any background thread to autopilot.log (by default they only go to the console)
+            threading.excepthook = _log_thread_exception
             self.ap_thread = kthread.KThread(target=self.engine_loop, name="EDAutopilot")
             self.ap_thread.start()
 
@@ -3231,7 +3243,7 @@ class EDAutopilot:
         hang on exit have then kill python exec.
         @return:
         """
-        self.keys.release_all_keys()
+        self._release_keys_safe()
         if self.vce != None:
             self.vce.quit()
         if self.overlay != None:
@@ -3240,234 +3252,262 @@ class EDAutopilot:
 
     def engine_loop(self):
         """
-        This function will execute in its own thread and will loop forever until the self.terminate flag is set
+        This function will execute in its own thread and will loop forever until the self.terminate flag is set.
+        Every iteration is protected: a stop request (EDAP_Interrupt, raised asynchronously into this thread) or an
+        unexpected error must never kill the engine thread, otherwise EDAP silently stops reacting to all assists.
         @return:
         """
         while not self.terminate:
-            # TODO - Remove these show compass/target all the time
-            if self.debug_show_compass_overlay:
-                self.get_nav_offset(self.scrReg)
-            if self.debug_show_target_overlay:
-                self.get_target_offset(self.scrReg, True)
-
-            # TODO - Enable for test
-            # self.start_sco_monitoring()
-
-            # Ship calibration functions
-            if self.ship_tst_roll_enabled:
-                self.ship_control.ship_calibrate_roll()
-                self.ship_tst_roll_enabled = False
-            if self.ship_tst_pitch_enabled:
-                self.ship_control.ship_calibrate_pitch()
-                self.ship_tst_pitch_enabled = False
-            if self.ship_tst_yaw_enabled:
-                self.ship_control.ship_calibrate_yaw()
-                self.ship_tst_yaw_enabled = False
-
-            if self.fsd_assist_enabled:
-                logger.debug("Running fsd_assist")
-                set_focus_elite_window()
-                self.update_overlay()
-                self.jump_cnt = 0
-                self.refuel_cnt = 0
-                self.total_dist_jumped = 0
-                self.total_jumps = 0
-                fin = True
-                # could be deep in call tree when user disables FSD, so need to trap that exception
-                try:
-                    fin = self.fsd_assist(self.scrReg)
-                except EDAP_Interrupt:
-                    logger.debug("Caught stop exception")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    logger.debug("FSD Assist trapped generic:"+str(e))
-                    print("Trapped generic:"+str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                self.fsd_assist_enabled = False
-                self.ap_ckb('fsd_stop')
-                self.update_overlay()
-
-                # if fsd_assist returned false then we are not finished, meaning we have an in system target
-                # defined.  So lets enable Supercruise assist to get us there
-                # Note: this is tricky, in normal FSD jumps the target is pretty much on the other side of Sun
-                #  when we arrive, but not so when we are in the final system
-                if fin == FSDAssistReturn.Partial:
-                    self.ap_ckb("sc_start")
-
-                # drop all out debug windows
-                # cv2.destroyAllWindows()
-                # cv2.waitKey(10)
-
-            elif self.sc_assist_enabled:
-                logger.debug("Running sc_assist")
-                set_focus_elite_window()
-                self.update_overlay()
-                try:
-                    self.update_ap_status("SC to Target")
-                    self.sc_assist(self.scrReg)
-                except EDAP_Interrupt:
-                    logger.debug("Caught stop exception")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:"+str(e))
-                    logger.debug("SC Assist trapped generic:"+str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                logger.debug("Completed sc_assist")
-                self.sc_assist_enabled = False
-                self.ap_ckb('sc_stop')
-                self.update_overlay()
-
-            elif self.waypoint_assist_enabled:
-                logger.debug("Running waypoint_assist")
-
-                set_focus_elite_window()
-                self.update_overlay()
-                self.jump_cnt = 0
-                self.refuel_cnt = 0
-                self.total_dist_jumped = 0
-                self.total_jumps = 0
-                try:
-                    self.waypoint_assist(self.keys, self.scrReg)
-                except EDAP_Interrupt:
-                    logger.debug("Caught stop exception")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:"+str(e))
-                    logger.debug("Waypoint Assist trapped generic:"+str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                self.waypoint_assist_enabled = False
-                self.ap_ckb('waypoint_stop')
-                self.update_overlay()
-
-            elif self.robigo_assist_enabled:
-                logger.debug("Running robigo_assist")
-                set_focus_elite_window()
-                self.update_overlay()
-                try:
-                    self.robigo_assist()
-                except EDAP_Interrupt:
-                    logger.debug("Caught stop exception")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:"+str(e))
-                    logger.debug("Robigo Assist trapped generic:"+str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                self.robigo_assist_enabled = False
-                self.ap_ckb('robigo_stop')
-                self.update_overlay()
-
-            elif self.afk_combat_assist_enabled:
-                self.update_overlay()
-                try:
-                    self.afk_combat_loop()
-                except EDAP_Interrupt:
-                    logger.debug("Stopping afk_combat")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:" + str(e))
-                    logger.debug("AFK Combat Assist trapped generic:" + str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                self.afk_combat_assist_enabled = False
-                self.ap_ckb('afk_stop')
-                self.update_overlay()
-
-            elif self.dss_assist_enabled:
-                logger.debug("Running dss_assist")
-                set_focus_elite_window()
-                self.update_overlay()
-                try:
-                    self.dss_assist()
-                except EDAP_Interrupt:
-                    logger.debug("Stopping DSS Assist")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:" + str(e))
-                    logger.debug("DSS Assist trapped generic:" + str(e))
-                    traceback.print_exc()
-
-                self.dss_assist_enabled = False
-                self.ap_ckb('dss_stop')
-                self.update_overlay()
-
-            elif self.single_waypoint_enabled:
-                self.update_overlay()
-                try:
-                    self.single_waypoint_assist()
-                except EDAP_Interrupt:
-                    logger.debug("Stopping Single Waypoint Assist")
-                    self.keys.release_all_keys()
-                except Exception as e:
-                    print("Trapped generic:" + str(e))
-                    logger.debug("Single Waypoint Assist trapped generic:" + str(e))
-                    traceback.print_exc()
-
-                self.stop_sco_monitoring()
-                self.single_waypoint_enabled = False
-                self.ap_ckb('single_waypoint_stop')
-                self.update_overlay()
-
-            # Check once EDAPGUI loaded to prevent errors logging to the listbox before loaded
-            if self.gui_loaded:
-                # Check if ship has changed
-                ship = self.jn.ship_state()['type']
-                # Check if a ship and not a suit (on foot)
-                if ship not in ship_size_map:
-                    # Clear current ship
-                    self.current_ship_type = None
-                    self.current_ship_cfg = None
-                else:
-                    ship_fullname = get_ship_fullname(ship)
-
-                    # Check if ship changed or just loaded
-                    if ship != self.current_ship_type:
-                        if self.current_ship_type is not None:
-                            cur_ship_fullname = get_ship_fullname(self.current_ship_type)
-                            self.ap_ckb('log+vce', f"Switched ship from your {cur_ship_fullname} to your {ship_fullname}.")
-                        else:
-                            self.ap_ckb('log+vce', f"Welcome aboard your {ship_fullname}.")
-
-                        # Check for fuel scoop and advanced docking computer
-                        if not self.jn.ship_state()['has_fuel_scoop']:
-                            self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is not fitted with a Fuel Scoop.")
-                        if not self.jn.ship_state()['has_adv_dock_comp']:
-                            self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is not fitted with an Advanced Docking Computer.")
-                        if self.jn.ship_state()['has_std_dock_comp']:
-                            self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is fitted with a Standard Docking Computer.")
-                        if self.jn.ship_state()['has_supercruise_assist']:
-                            self.ap_ckb('log+vce', f"Your {ship_fullname} is fitted with a Supercruise Assist module.")
-
-                        # Store ship for change detection BEFORE loading config and GUI update
-                        self.current_ship_type = ship
-
-                        # Load ship configuration with proper hierarchy
-                        self.load_ship_configuration(ship)
-
-                        # Update current ship config
-                        self.current_ship_cfg = self.ship_configs['Ship_Configs'][self.current_ship_type]
-
-                        # Update GUI with ship config
-                        self.ap_ckb('update_ship_cfg')
-
-                        # Reload templates for this ship
-                        self.templ.reload_templates(self.scr.scaleX, self.scr.scaleY)
-
-            self.update_overlay()
-            cv2.waitKey(10)
-            # Catch EDAP_Interrupt raised while idle to prevent killing the engine loop
             try:
-                sleep(1)
+                self._engine_loop_once()
             except EDAP_Interrupt:
-                logger.debug("EDAP_Interrupt caught in engine_loop idle")
+                # Stop request arrived outside of an assist's own try/except (e.g. during clean-up).
+                logger.debug("EDAP_Interrupt caught in engine_loop")
+                self._release_keys_safe()
+            except Exception as e:
+                logger.exception(f"Unhandled error in engine loop, continuing: {e}")
+                self.ap_ckb('log', f"ERROR in engine loop (see autopilot.log): {e}")
+                self._release_keys_safe()
+                try:
+                    sleep(1)
+                except EDAP_Interrupt:
+                    pass
+
+    def _release_keys_safe(self):
+        """ Releases all keys, never raises. """
+        try:
+            self.keys.release_all_keys()
+        except EDAP_Interrupt:
+            pass
+        except Exception as e:
+            logger.warning(f"release_all_keys failed: {e}")
+
+    def _engine_loop_once(self):
+        """ One iteration of the engine loop (see engine_loop). """
+        # TODO - Remove these show compass/target all the time
+        if self.debug_show_compass_overlay:
+            self.get_nav_offset(self.scrReg)
+        if self.debug_show_target_overlay:
+            self.get_target_offset(self.scrReg, True)
+
+        # TODO - Enable for test
+        # self.start_sco_monitoring()
+
+        # Ship calibration functions
+        if self.ship_tst_roll_enabled:
+            self.ship_control.ship_calibrate_roll()
+            self.ship_tst_roll_enabled = False
+        if self.ship_tst_pitch_enabled:
+            self.ship_control.ship_calibrate_pitch()
+            self.ship_tst_pitch_enabled = False
+        if self.ship_tst_yaw_enabled:
+            self.ship_control.ship_calibrate_yaw()
+            self.ship_tst_yaw_enabled = False
+
+        if self.fsd_assist_enabled:
+            logger.debug("Running fsd_assist")
+            set_focus_elite_window()
+            self.update_overlay()
+            self.jump_cnt = 0
+            self.refuel_cnt = 0
+            self.total_dist_jumped = 0
+            self.total_jumps = 0
+            fin = True
+            # could be deep in call tree when user disables FSD, so need to trap that exception
+            try:
+                fin = self.fsd_assist(self.scrReg)
+            except EDAP_Interrupt:
+                logger.debug("Caught stop exception")
+                self._release_keys_safe()
+            except Exception as e:
+                logger.debug("FSD Assist trapped generic:"+str(e))
+                print("Trapped generic:"+str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            self.fsd_assist_enabled = False
+            self.ap_ckb('fsd_stop')
+            self.update_overlay()
+
+            # if fsd_assist returned false then we are not finished, meaning we have an in system target
+            # defined.  So lets enable Supercruise assist to get us there
+            # Note: this is tricky, in normal FSD jumps the target is pretty much on the other side of Sun
+            #  when we arrive, but not so when we are in the final system
+            if fin == FSDAssistReturn.Partial:
+                self.ap_ckb("sc_start")
+
+            # drop all out debug windows
+            # cv2.destroyAllWindows()
+            # cv2.waitKey(10)
+
+        elif self.sc_assist_enabled:
+            logger.debug("Running sc_assist")
+            set_focus_elite_window()
+            self.update_overlay()
+            try:
+                self.update_ap_status("SC to Target")
+                self.sc_assist(self.scrReg)
+            except EDAP_Interrupt:
+                logger.debug("Caught stop exception")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:"+str(e))
+                logger.debug("SC Assist trapped generic:"+str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            logger.debug("Completed sc_assist")
+            self.sc_assist_enabled = False
+            self.ap_ckb('sc_stop')
+            self.update_overlay()
+
+        elif self.waypoint_assist_enabled:
+            logger.debug("Running waypoint_assist")
+
+            set_focus_elite_window()
+            self.update_overlay()
+            self.jump_cnt = 0
+            self.refuel_cnt = 0
+            self.total_dist_jumped = 0
+            self.total_jumps = 0
+            try:
+                self.waypoint_assist(self.keys, self.scrReg)
+            except EDAP_Interrupt:
+                logger.debug("Caught stop exception")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:"+str(e))
+                logger.debug("Waypoint Assist trapped generic:"+str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            self.waypoint_assist_enabled = False
+            self.ap_ckb('waypoint_stop')
+            self.update_overlay()
+
+        elif self.robigo_assist_enabled:
+            logger.debug("Running robigo_assist")
+            set_focus_elite_window()
+            self.update_overlay()
+            try:
+                self.robigo_assist()
+            except EDAP_Interrupt:
+                logger.debug("Caught stop exception")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:"+str(e))
+                logger.debug("Robigo Assist trapped generic:"+str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            self.robigo_assist_enabled = False
+            self.ap_ckb('robigo_stop')
+            self.update_overlay()
+
+        elif self.afk_combat_assist_enabled:
+            self.update_overlay()
+            try:
+                self.afk_combat_loop()
+            except EDAP_Interrupt:
+                logger.debug("Stopping afk_combat")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:" + str(e))
+                logger.debug("AFK Combat Assist trapped generic:" + str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            self.afk_combat_assist_enabled = False
+            self.ap_ckb('afk_stop')
+            self.update_overlay()
+
+        elif self.dss_assist_enabled:
+            logger.debug("Running dss_assist")
+            set_focus_elite_window()
+            self.update_overlay()
+            try:
+                self.dss_assist()
+            except EDAP_Interrupt:
+                logger.debug("Stopping DSS Assist")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:" + str(e))
+                logger.debug("DSS Assist trapped generic:" + str(e))
+                traceback.print_exc()
+
+            self.dss_assist_enabled = False
+            self.ap_ckb('dss_stop')
+            self.update_overlay()
+
+        elif self.single_waypoint_enabled:
+            self.update_overlay()
+            try:
+                self.single_waypoint_assist()
+            except EDAP_Interrupt:
+                logger.debug("Stopping Single Waypoint Assist")
+                self._release_keys_safe()
+            except Exception as e:
+                print("Trapped generic:" + str(e))
+                logger.debug("Single Waypoint Assist trapped generic:" + str(e))
+                traceback.print_exc()
+
+            self.stop_sco_monitoring()
+            self.single_waypoint_enabled = False
+            self.ap_ckb('single_waypoint_stop')
+            self.update_overlay()
+
+        # Check once EDAPGUI loaded to prevent errors logging to the listbox before loaded
+        if self.gui_loaded:
+            # Check if ship has changed
+            ship = self.jn.ship_state()['type']
+            # Check if a ship and not a suit (on foot)
+            if ship not in ship_size_map:
+                # Clear current ship
+                self.current_ship_type = None
+                self.current_ship_cfg = None
+            else:
+                ship_fullname = get_ship_fullname(ship)
+
+                # Check if ship changed or just loaded
+                if ship != self.current_ship_type:
+                    if self.current_ship_type is not None:
+                        cur_ship_fullname = get_ship_fullname(self.current_ship_type)
+                        self.ap_ckb('log+vce', f"Switched ship from your {cur_ship_fullname} to your {ship_fullname}.")
+                    else:
+                        self.ap_ckb('log+vce', f"Welcome aboard your {ship_fullname}.")
+
+                    # Check for fuel scoop and advanced docking computer
+                    if not self.jn.ship_state()['has_fuel_scoop']:
+                        self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is not fitted with a Fuel Scoop.")
+                    if not self.jn.ship_state()['has_adv_dock_comp']:
+                        self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is not fitted with an Advanced Docking Computer.")
+                    if self.jn.ship_state()['has_std_dock_comp']:
+                        self.ap_ckb('log+vce', f"Warning, your {ship_fullname} is fitted with a Standard Docking Computer.")
+                    if self.jn.ship_state()['has_supercruise_assist']:
+                        self.ap_ckb('log+vce', f"Your {ship_fullname} is fitted with a Supercruise Assist module.")
+
+                    # Store ship for change detection BEFORE loading config and GUI update
+                    self.current_ship_type = ship
+
+                    # Load ship configuration with proper hierarchy
+                    self.load_ship_configuration(ship)
+
+                    # Update current ship config
+                    self.current_ship_cfg = self.ship_configs['Ship_Configs'][self.current_ship_type]
+
+                    # Update GUI with ship config
+                    self.ap_ckb('update_ship_cfg')
+
+                    # Reload templates for this ship
+                    self.templ.reload_templates(self.scr.scaleX, self.scr.scaleY)
+
+        self.update_overlay()
+        cv2.waitKey(10)
+        # Catch EDAP_Interrupt raised while idle to prevent killing the engine loop
+        try:
+            sleep(1)
+        except EDAP_Interrupt:
+            logger.debug("EDAP_Interrupt caught in engine_loop idle")
 
     def set_throttle_0(self, repeat=1):
         if self.status.get_flag(FlagsSupercruise):
