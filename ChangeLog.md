@@ -1,3 +1,7 @@
+# 10/18/2026 v1.9.4 b10
+- Fix: trading waited forever for market data when the commodities market could not be opened. The wait is now
+  limited to 30 s; existing data of the same station is used, otherwise the trade at this station is skipped.
+
 # 10/18/2026 v1.9.4 b9
 - OCR text check accepts text truncated at the region edge (e.g. 'CONNECT' for 'CONNECTED'). Station services
   waited ~15 s for the 'CONNECTED' text on every trade.

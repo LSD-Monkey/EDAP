@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from time import sleep
 from CargoParser import CargoParser
 from EDAP_data import *
@@ -284,7 +285,12 @@ class EDWayPoint:
                 market_time_old = self.market_parser.current_data['timestamp']
 
             # Go to the Station Commodities Market
-            self.ap.stn_svcs_in_ship.goto_commodities_market()
+            res = self.ap.stn_svcs_in_ship.goto_commodities_market()
+            if not res:
+                # The market may still have opened (only the OCR check failed). The Market.json wait below decides.
+                self.ap_ckb('log', "Commodities market not confirmed by OCR (check Station Services calibration). "
+                                   "Waiting for market data.")
+                logger.warning("execute_trade: goto_commodities_market returned False")
 
             # # CONNECTED TO menu is different between stations and fleet carriers
             # if fleet_carrier:
@@ -311,7 +317,18 @@ class EDWayPoint:
             if data is not None:
                 market_time_new = self.market_parser.current_data['timestamp']
 
+            # The game writes Market.json when the market is opened. Wait for it, but not forever.
+            wait_start = time.time()
             while market_time_new == market_time_old:
+                if time.time() - wait_start > 30:
+                    # No new data. Use the existing file only if it belongs to this station.
+                    if data is not None and data.get('MarketID') == ap.jn.ship_state().get('MarketID'):
+                        logger.info("execute_trade: no new market data after 30 s, using existing data of this station")
+                        break
+                    self.ap_ckb('log+vce', "No market data received. Skipping trade at this station.")
+                    logger.warning("execute_trade: Market.json not updated within 30 s")
+                    self.ap.ship_control.goto_cockpit_view()
+                    return
                 market_time_new = ""
                 data = self.market_parser.get_market_data()
                 if data is not None:
