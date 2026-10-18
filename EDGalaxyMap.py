@@ -172,9 +172,9 @@ class EDGalaxyMap:
 
             # Right side: 1x right = info panel, 2x right = icon column. Extra presses do no harm (the icon
             # column is the right most element, the top icon the upper most), they make the start position
-            # independent of where the focus was: 4x right + 8x up = top icon of the right column.
+            # independent of where the focus was: 8x right + 8x up = top icon of the right column.
             # From there 7x down = PLOT ROUTE -> select.
-            ap.keys.send('UI_Right', repeat=4, repeat_delay=0.4)
+            ap.keys.send('UI_Right', repeat=8, repeat_delay=0.3)
             sleep(0.5)
             ap.keys.send('UI_Up', repeat=8, repeat_delay=0.25)
             sleep(0.5)
