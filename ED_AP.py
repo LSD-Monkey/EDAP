@@ -389,7 +389,7 @@ class EDAutopilot:
             "AutoTuneRPYRates": False,  # Enable auto-tune for RPY rates.
             "PauseWhenUnfocused": True,  # Pause key input while Elite is not the active window
             "SCAssistTimeout": 3600,  # In-game SC Assist: max. time in secs to reach the destination (0 = no limit)
-            "SCAssistAlignBeforeActivate": True,  # In-game SC Assist: lock and compass align before activation
+            "SCAssistAlign": True,  # In-game SC Assist: compass align (throttle 0) after activating the SCA
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
@@ -467,8 +467,8 @@ class EDAutopilot:
                 cnf['PauseWhenUnfocused'] = True
             if 'SCAssistTimeout' not in cnf:
                 cnf['SCAssistTimeout'] = 3600
-            if 'SCAssistAlignBeforeActivate' not in cnf:
-                cnf['SCAssistAlignBeforeActivate'] = True
+            if 'SCAssistAlign' not in cnf:
+                cnf['SCAssistAlign'] = cnf.get('SCAssistAlignBeforeActivate', True)
             if 'SCAssistCheckActiveOCR' not in cnf:
                 cnf['SCAssistCheckActiveOCR'] = True
             self.config = cnf
@@ -2782,15 +2782,14 @@ class EDAutopilot:
     def sc_assist(self, scr_reg, do_docking=True, dst_name: str | None = None):
         """ Supercruise Assist using the in-game Supercruise Assist (SCA) module.
 
-        1. Leave the station/planet if required and enter supercruise.
-        2. Destination is dst_name (e.g. a waypoint station) or else the current in-game destination from
+        0. Destination is dst_name (e.g. a waypoint station) or else the current in-game destination from
            Status.json (Destination.Name).
-        3. Lock the destination if needed and roughly align to it with the compass (optional, see config
-           'SCAssistAlignBeforeActivate').
-        4. Activate the in-game SCA: Nav Panel > NAVIGATION > destination > SUPERCRUISE ASSIST.
-        5. Hands off: the game flies and drops us at the destination. EDAP sends no flight keys, it only monitors
+        1. Leave the station/planet if required, enter supercruise and set throttle 0.
+        2. Activate the in-game SCA: Nav Panel > NAVIGATION > destination > SUPERCRUISE ASSIST.
+        3. Align to the destination with the compass while standing still (optional, config 'SCAssistAlign').
+        4. Hands off: the game flies and drops us at the destination. EDAP sends no flight keys, it only monitors
            journal/status (arrival, interdiction, timeout) and optionally checks for 'SUPERCRUISE ASSIST ACTIVE'.
-        6. Dock (optional).
+        5. Dock (optional).
 
         Falls back to sc_assist_manual() if the ship has no SCA module or the destination cannot be selected.
         @param scr_reg: Screen regions.
@@ -2860,23 +2859,30 @@ class EDAutopilot:
         self.ap_ckb('log+vce', "Supercruise Assist complete")
 
     def _sc_assist_ingame_engage(self, scr_reg, target: str) -> bool:
-        """ Locks and aligns to the target (optional) and activates the in-game Supercruise Assist.
+        """ Activates the in-game Supercruise Assist and aligns to the target while standing still.
+        Flow (in supercruise):
+            1. Throttle 0.
+            2. Nav Panel > NAVIGATION > target > SUPERCRUISE ASSIST (this also locks the destination).
+            3. Compass align to the target with throttle 0 (optional, 'SCAssistAlign').
+            4. The in-game SCA flies to the target and drops out of supercruise.
         Returns True if the SCA was activated (destination verified via Status.json). """
         # The in-game SCA drops us out of supercruise by itself. EDAP must not press 'disengage' (the SCO
         # monitoring would do that), otherwise the FSD would be charged again in normal space.
         self.stop_sco_monitoring()
 
-        if self.config['SCAssistAlignBeforeActivate']:
-            # Lock the destination first (if not already), so the compass shows it and we can align.
-            if not self.nav_panel.destination_matches(target):
-                self.update_ap_status(f"Targeting: {target}")
-                if not self.nav_panel.lock_destination(target):
-                    return False
-                self.nav_panel.wait_for_destination(target, timeout=5.0)
-                sleep(3)  # Wait for compass to stop flashing blue
+        # 1. Stand still in supercruise
+        self.set_throttle_0()
 
+        # 2. Activate the in-game SCA
+        self.update_ap_status("Activate SC Assist")
+        if not self.nav_panel.activate_supercruise_assist(target):
+            return False
+        self.ap_ckb('log', f"In-game Supercruise Assist activated for '{target}'.")
+
+        # 3. Align to the target while standing still
+        if self.config['SCAssistAlign']:
+            sleep(3)  # Wait for the compass to stop flashing blue after the destination change
             self.update_ap_status("Align")
-            self.set_throttle_50()  # Don't want the loop of shame
             try:
                 self.compass_align(scr_reg)
             except EDAP_Interrupt:
@@ -2885,11 +2891,6 @@ class EDAutopilot:
                 # Not fatal, the in-game SCA turns the ship to the target by itself.
                 logger.warning(f"sc_assist: compass align failed: {e}")
 
-        self.update_ap_status("Activate SC Assist")
-        if not self.nav_panel.activate_supercruise_assist(target):
-            return False
-
-        self.ap_ckb('log', f"In-game Supercruise Assist activated for '{target}'.")
         return True
 
     def _sc_assist_ingame_monitor(self, scr_reg, target: str) -> SCAssistResult:

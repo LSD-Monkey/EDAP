@@ -1,3 +1,8 @@
+# 10/18/2026 v1.9.4 b5
+- SC Assist flow changed: enter supercruise, throttle 0, activate the in-game SCA, then align to the destination
+  while standing still, then let the in-game SCA fly and drop. Setting renamed to 'SCAssistAlign'
+  (old 'SCAssistAlignBeforeActivate' is migrated).
+
 # 10/18/2026 v1.9.4 b4
 - New: key input is paused (not stopped) while Elite is not the active window, e.g. after clicking into EDAP or
   another program. A held key is released and the remaining hold time continues once Elite is active again.
