@@ -181,15 +181,12 @@ class EDGalaxyMap:
             ap.keys.send('UI_Select')  # Select >| button
             sleep(self.SystemSelectDelay)
 
-            # Note: the former CamZoomIn step (to put focus back on the map) was removed, the plot
-            # hold below works directly after selecting the search result.
-            sleep(0.5)
-
-            # plot route. Not that once the system has been selected, as shown in the info panel
-            # and the gal map has focus, there is no need to wait for the map to bring the system
-            # to the center screen, the system can be selected while the map is moving.
-            ap.keys.send('UI_Select', hold=0.75)
-
+            # Plot route via the system info panel: 2x right, 7x down to 'PLOT ROUTE', then select.
+            ap.keys.send('UI_Right', repeat=2)
+            sleep(0.2)
+            ap.keys.send('UI_Down', repeat=7)
+            sleep(0.2)
+            ap.keys.send('UI_Select')
             sleep(0.05)
 
             # if got passed through the ship() object, lets call it to see if a target has been

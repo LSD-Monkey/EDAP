@@ -1,5 +1,5 @@
 # 10/18/2026 v1.9.4 b12
-- Galaxy Map: removed the CamZoomIn step before plotting the route.
+- Galaxy Map: route is plotted via the info panel (2x UI_Right, 7x UI_Down, UI_Select) instead of CamZoomIn + hold.
 - Enable Randomness extended: varied default key hold times and small gaps between key presses (calibrated
   rotation holds unchanged), random pauses before undocking, supercruise entry, FSD jump and trading.
 
