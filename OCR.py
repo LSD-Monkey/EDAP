@@ -369,7 +369,12 @@ class OCR:
         text_ns = text.replace(' ', '').upper()
         ocr_textlist_ns = str(ocr_textlist).replace(' ', '').upper()
 
-        if text_ns in ocr_textlist_ns:
+        # Also accept text truncated at the region edge (e.g. 'CONNECT' for 'CONNECTED' when the calibrated
+        # region cuts the word), if at least 7 characters and ~75 % of the text are present.
+        min_len = max(7, int(len(text_ns) * 0.75))
+        truncated_ok = len(text_ns) > min_len and text_ns[:min_len] in ocr_textlist_ns
+
+        if text_ns in ocr_textlist_ns or truncated_ok:
             logger.debug(f"Found '{text}' text in item text '{str(ocr_textlist)}'.")
             return True, str(ocr_textlist)
         else:

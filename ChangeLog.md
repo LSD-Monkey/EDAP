@@ -1,3 +1,7 @@
+# 10/18/2026 v1.9.4 b9
+- OCR text check accepts text truncated at the region edge (e.g. 'CONNECT' for 'CONNECTED'). Station services
+  waited ~15 s for the 'CONNECTED' text on every trade.
+
 # 10/18/2026 v1.9.4 b8
 - Waypoint/Single Waypoint: with the Supercruise Assist module, supercruise_to_station no longer requires a visible
   compass before starting SC Assist (it often is not visible after arriving in a system).
