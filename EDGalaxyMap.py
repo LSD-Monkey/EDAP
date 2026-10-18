@@ -135,99 +135,98 @@ class EDGalaxyMap:
             ap.keys.send('GalaxyMapOpen')
             return True
 
-        # navigate to and select: search field
-        ap.keys.send('UI_Up')
-        sleep(0.05)
-        ap.keys.send('UI_Select')
-        sleep(0.05)
+        # Sequence recorded in game (session 2026-10-18_22-51-01):
+        #   search field -> type name -> ENTER -> >| button -> UI_Select (jumps to the 1st result; every
+        #   further UI_Select on >| jumps to the NEXT result) -> 2x UI_Right (right side panel)
+        #   -> 7x UI_Down ('PLOT ROUTE') -> UI_Select.
+        # The first result is often not the wanted system (e.g. 'COLONIA' -> 'EOL PROU LW-L C8-75' first).
+        # If the plotted route goes to a wrong system, the map is closed and the search is repeated with one
+        # more >| press, so the focus always starts from a known position.
+        for result_no in range(1, 6):
+            if result_no > 1:
+                # Reopen the map so the focus starts at a known position again
+                ap.keys.send('GalaxyMapOpen')
+                sleep(1.5)
+                if not self.goto_galaxy_map():
+                    return False
 
-        # type in the System name
-        typewrite(target_name_uc, interval=0.25)
-        logger.debug(f"Entered system name: {target_name_uc}.")
-        sleep(0.05)
+            last_nav_route_sys_uc = ap.nav_route.get_last_system().upper() if ap.nav_route is not None else ""
+            logger.debug(f"Previous Nav Route dest: {last_nav_route_sys_uc}. Search result no. {result_no}.")
 
-        # send enter key (removes focus out of input field)
-        ap.keys.send_key('Down', 28)  # 28=ENTER
-        sleep(0.05)
-        ap.keys.send_key('Up', 28)  # 28=ENTER
-        sleep(0.05)
+            self._search_system(ap, target_name_uc)
 
-        # According to some reports, the ENTER key does not always reselect the text
-        # box, so this down and up will reselect the text box.
-        ap.keys.send('UI_Down')
-        sleep(0.05)
-        ap.keys.send('UI_Up')
-        sleep(0.05)
+            # >| button: 1st press shows the 1st result, each further press the next result
+            for _ in range(result_no):
+                ap.keys.send('UI_Select')
+                sleep(max(self.SystemSelectDelay, 1.0))
 
-        # navigate to and select: search button
-        ap.keys.send('UI_Right')  # to >| button
-        sleep(0.05)
+            # Right side panel -> PLOT ROUTE -> select
+            ap.keys.send('UI_Right', repeat=2)
+            sleep(0.3)
+            ap.keys.send('UI_Down', repeat=7)
+            sleep(0.3)
+            ap.keys.send('UI_Select')
 
-        correct_route = False
-        attempts = 0
-        while not correct_route:
-            attempts += 1
-            if attempts > 5:
-                self._save_debug_screenshot('galmap_wrong_target')
-                self.ap_ckb('log+vce', f"Unable to plot a route to {target_name_uc} in the Galaxy Map.")
+            if ap.nav_route is None:
+                logger.debug("Unable to check Nav Route, so assuming it is correct.")
+                break
+
+            logger.debug("Waiting for Nav Route to update.")
+            wait_start = time.time()
+            curr_nav_route_sys_uc = last_nav_route_sys_uc
+            while time.time() - wait_start < 20:
+                sleep(0.5)
+                curr_nav_route_sys_uc = ap.nav_route.get_last_system().upper()
+                if curr_nav_route_sys_uc != last_nav_route_sys_uc:
+                    break
+
+            if curr_nav_route_sys_uc == target_name_uc:
+                logger.debug(f"Nav Route correctly updated to {target_name_uc}.")
+                break
+            if curr_nav_route_sys_uc == last_nav_route_sys_uc:
+                # Nothing plotted at all -> the key sequence did not work, retrying will not help
+                self._save_debug_screenshot('galmap_no_route')
+                self.ap_ckb('log+vce', f"No route plotted to {target_name_uc} (Galaxy Map). "
+                                       f"Screenshot saved in debug-output.")
                 ap.keys.send('GalaxyMapOpen')
                 return False
-            # Store the current nav route system
-            last_nav_route_sys = ap.nav_route.get_last_system()
-            last_nav_route_sys_uc = last_nav_route_sys.upper()
-            logger.debug(f"Previous Nav Route dest: {last_nav_route_sys_uc}.")
-
-            # Select first (or next) system
-            ap.keys.send('UI_Select')  # Select >| button
-            sleep(self.SystemSelectDelay)
-
-            # Plot route via the system info panel: 4x right, 7x down to 'PLOT ROUTE', then select.
-            ap.keys.send('UI_Right', repeat=4)
-            sleep(0.2)
-            ap.keys.send('UI_Down', repeat=7)
-            sleep(0.2)
-            ap.keys.send('UI_Select')
-            sleep(0.05)
-
-            # if got passed through the ship() object, lets call it to see if a target has been
-            # selected yet... otherwise we wait.  If long route, it may take a few seconds
-            if ap.nav_route is not None:
-                logger.debug(f"Waiting for Nav Route to update.")
-                wait_start = time.time()
-                while 1:
-                    if time.time() - wait_start > 20:
-                        # Route was not plotted (search or plot did not work). Do not wait forever.
-                        self._save_debug_screenshot('galmap_no_route')
-                        self.ap_ckb('log+vce', f"No route plotted to {target_name_uc} (Galaxy Map). "
-                                               f"Screenshot saved in debug-output.")
-                        ap.keys.send('GalaxyMapOpen')
-                        return False
-                    sleep(0.5)
-                    curr_nav_route_sys = ap.nav_route.get_last_system()
-                    curr_nav_route_sys_uc = curr_nav_route_sys.upper()
-                    # Check if the nav route has been changed (right or wrong)
-                    if curr_nav_route_sys_uc != last_nav_route_sys_uc:
-                        logger.debug(f"Nav Route dest changed from: {last_nav_route_sys_uc} to: {curr_nav_route_sys_uc}.")
-                        # Check if this nav route is correct
-                        if curr_nav_route_sys_uc == target_name_uc:
-                            logger.debug(f"Nav Route correctly updated to {target_name_uc}.")
-                            # Break loop and exit
-                            correct_route = True
-                            break
-                        else:
-                            # Try the next system, go back to the search bar
-                            logger.debug(f"Nav Route updated with wrong target: {curr_nav_route_sys_uc}. Select next target.")
-                            ap.keys.send('UI_Up')
-                            break
-            else:
-                # Cannot check route, so assume right
-                logger.debug(f"Unable to check Nav Route, so assuming it is correct.")
-                correct_route = True
+            logger.debug(f"Nav Route went to wrong system {curr_nav_route_sys_uc}, trying next search result.")
+        else:
+            self._save_debug_screenshot('galmap_wrong_target')
+            self.ap_ckb('log+vce', f"Unable to plot a route to {target_name_uc} in the Galaxy Map.")
+            ap.keys.send('GalaxyMapOpen')
+            return False
 
         # Close Galaxy map
         ap.keys.send('GalaxyMapOpen')
         sleep(0.5)
         return True
+
+    def _search_system(self, ap, target_name_uc: str):
+        """ Galaxy Map must be open with the focus near the search bar (after goto_galaxy_map).
+        Types the name into the search field and moves the focus to the >| button. """
+        ap.keys.send('UI_Up')
+        sleep(0.1)
+        ap.keys.send('UI_Select')  # open search field
+        sleep(0.3)
+
+        typewrite(target_name_uc, interval=0.25)
+        logger.debug(f"Entered system name: {target_name_uc}.")
+        sleep(0.2)
+
+        # ENTER closes the input field
+        ap.keys.send_key('Down', 28)  # 28=ENTER
+        sleep(0.05)
+        ap.keys.send_key('Up', 28)
+        sleep(0.5)
+
+        # Reselect the search box (ENTER does not always do it), then go right to the >| button
+        ap.keys.send('UI_Down')
+        sleep(0.1)
+        ap.keys.send('UI_Up')
+        sleep(0.1)
+        ap.keys.send('UI_Right')
+        sleep(0.2)
 
     def set_next_system(self, ap, target_system) -> bool:
         """ Sets the next system to jump to, or the final system to jump to.
