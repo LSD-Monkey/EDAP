@@ -304,6 +304,7 @@ class EDAutopilot:
         # Get values from classes
         if self.keys:
             self.config['ActivateEliteEachKey'] = self.keys.activate_window
+            self.config['PauseWhenUnfocused'] = self.keys.pause_when_unfocused
             self.config['Key_ModDelay'] = self.keys.key_mod_delay
             self.config['Key_DefHoldTime'] = self.keys.key_def_hold_time
             self.config['Key_RepeatDelay'] = self.keys.key_repeat_delay
@@ -386,6 +387,7 @@ class EDAutopilot:
             "PlanetDepartureSCOTime": 5.0,  # SCO boost time when leaving planet in secs
             "FleetCarrierMonitorCAPIDataPath": "",  # EDMC Fleet Carrier Monitor plugin data export path
             "AutoTuneRPYRates": False,  # Enable auto-tune for RPY rates.
+            "PauseWhenUnfocused": True,  # Pause key input while Elite is not the active window
             "SCAssistTimeout": 3600,  # In-game SC Assist: max. time in secs to reach the destination (0 = no limit)
             "SCAssistAlignBeforeActivate": True,  # In-game SC Assist: lock and compass align before activation
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
@@ -461,6 +463,8 @@ class EDAutopilot:
                 cnf['FleetCarrierMonitorCAPIDataPath'] = ""
             if 'AutoTuneRPYRates' not in cnf:
                 cnf['AutoTuneRPYRates'] = ""
+            if 'PauseWhenUnfocused' not in cnf:
+                cnf['PauseWhenUnfocused'] = True
             if 'SCAssistTimeout' not in cnf:
                 cnf['SCAssistTimeout'] = 3600
             if 'SCAssistAlignBeforeActivate' not in cnf:
@@ -628,6 +632,7 @@ class EDAutopilot:
         """ Update subclasses as necessary with config setting changes. """
         if self.keys:
             self.keys.activate_window = self.config['ActivateEliteEachKey']
+            self.keys.pause_when_unfocused = self.config['PauseWhenUnfocused']
             self.keys.key_mod_delay = self.config['Key_ModDelay']
             self.keys.key_def_hold_time = self.config['Key_DefHoldTime']
             self.keys.key_repeat_delay = self.config['Key_RepeatDelay']

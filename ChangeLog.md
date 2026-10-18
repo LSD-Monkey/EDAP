@@ -1,3 +1,8 @@
+# 10/18/2026 v1.9.4 b4
+- New: key input is paused (not stopped) while Elite is not the active window, e.g. after clicking into EDAP or
+  another program. A held key is released and the remaining hold time continues once Elite is active again.
+  Setting 'PauseWhenUnfocused' (default on, ignored if 'ActivateEliteEachKey' is on).
+
 # 10/18/2026 v1.9.4 b3
 - Fix: stopping an assist while a key is held (e.g. a long pitch) took until the hold time ended (up to minutes).
   Key holds are now interruptible and the key is always released.

@@ -37,6 +37,8 @@ For those wanting a detailed list, refer to the [Keyboard](https://github.com/bo
 * Modifier Key Delay : Delay for key modifiers to ensure modifier is detected before/after the key.
 * Default Hold Time : Default hold time for a key press.
 * Repeat Key Delay : Delay between key press repeats.
+* PauseWhenUnfocused (AP.json, default true) : Pause key input while Elite is not the active window. EDAP continues
+  automatically when you click back into Elite. Not used if 'ActivateEliteEachKey' is enabled.
 
 ## Voice
 * Enable Voice - Turns on/off voice

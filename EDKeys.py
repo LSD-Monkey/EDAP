@@ -32,6 +32,7 @@ class EDKeys:
         self.key_def_hold_time = 0.2  # Default hold time for a key press
         self.key_repeat_delay = 0.1  # Delay between key press repeats
         self.activate_window = False
+        self.pause_when_unfocused = True  # Pause (not stop) key input while Elite is not the foreground window
 
         self.keys_to_obtain = [
             'YawLeftButton',
@@ -254,16 +255,58 @@ class EDKeys:
         logger.info(f'Latest keybindings file:{latest_bindings}')
         return latest_bindings
 
-    @staticmethod
-    def _sleep_responsive(duration: float):
+    ELITE_WINDOW_TITLE = "Elite - Dangerous (CLIENT)"
+
+    def elite_has_focus(self) -> bool:
+        """ True if the Elite Dangerous window is the foreground window (True if it cannot be determined). """
+        try:
+            return win32gui.GetWindowText(win32gui.GetForegroundWindow()) == self.ELITE_WINDOW_TITLE
+        except Exception:
+            return True
+
+    def _pause_active(self) -> bool:
+        """ Pausing is only used if enabled and EDAP does not bring Elite to the front by itself. """
+        return self.pause_when_unfocused and not self.activate_window
+
+    def wait_for_focus(self) -> float:
+        """ Pauses (does not stop) while Elite is not the foreground window, e.g. because the user clicked into
+        another window. Key presses would otherwise go to the wrong window. Returns the paused time in seconds.
+        Stays interruptible, so the stop button still works while paused. """
+        if not self._pause_active() or self.elite_has_focus():
+            return 0.0
+        start = monotonic()
+        logger.info("Elite Dangerous is not the active window - key input paused.")
+        self.ap_ckb('log', "Elite is not the active window - EDAP paused. Click into Elite to continue.")
+        while not self.elite_has_focus():
+            sleep(0.25)
+        paused = monotonic() - start
+        logger.info(f"Elite Dangerous active again - key input resumed after {paused:.1f} s.")
+        self.ap_ckb('log', f"Elite active again - EDAP continues (paused {paused:.0f} s).")
+        sleep(0.3)  # Give the game a moment after regaining focus
+        return paused
+
+    def _sleep_responsive(self, duration: float, key=None):
         """ Sleeps in small steps. A stop request is raised asynchronously into the AP thread and is only
-        delivered between Python statements, so one long sleep() would delay the stop by the whole hold time. """
-        end = monotonic() + duration
-        while True:
-            remaining = end - monotonic()
-            if remaining <= 0:
-                break
+        delivered between Python statements, so one long sleep() would delay the stop by the whole hold time.
+        If 'key' (a held key) is given and Elite loses focus, the key is released, the hold time is paused until
+        Elite has focus again, then the key is pressed again for the remaining time. """
+        remaining = duration
+        last = monotonic()
+        while remaining > 0:
             sleep(min(0.05, remaining))
+            now = monotonic()
+            remaining -= now - last
+            last = now
+            if key is not None and remaining > 0 and self._pause_active() and not self.elite_has_focus():
+                ReleaseKey(key['key'])
+                for mod in key['mods']:
+                    ReleaseKey(mod)
+                self.wait_for_focus()
+                for mod in key['mods']:
+                    PressKey(mod)
+                    sleep(self.key_mod_delay)
+                PressKey(key['key'])
+                last = monotonic()
 
     def has_binding(self, key_binding: str) -> bool:
         """ Returns True if the given ED binding has a usable keyboard key. """
@@ -308,6 +351,9 @@ class EDKeys:
             if self.activate_window:
                 set_focus_elite_window()
                 sleep(0.05)
+            elif state is None or state == 1:
+                # Pause while Elite is not the active window (never pause a pure release).
+                self.wait_for_focus()
 
             if state is None or state == 1:
                 for mod in key['mods']:
@@ -320,7 +366,7 @@ class EDKeys:
                 if state is None:
                     if hold:
                         if hold > 0.0:
-                            self._sleep_responsive(hold)
+                            self._sleep_responsive(hold, key)
                     else:
                         if self.key_def_hold_time > 0.0:
                             sleep(self.key_def_hold_time)
