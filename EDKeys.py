@@ -5,6 +5,7 @@ from os import environ, listdir
 import os
 from os.path import getmtime, isfile, join
 from time import sleep, monotonic
+import random
 from typing import Any, final
 from xml.etree.ElementTree import parse
 
@@ -33,6 +34,7 @@ class EDKeys:
         self.key_repeat_delay = 0.1  # Delay between key press repeats
         self.activate_window = False
         self.pause_when_unfocused = True  # Pause (not stop) key input while Elite is not the foreground window
+        self.randomness = False  # Vary default hold times and delays between keys (EnableRandomness)
 
         self.keys_to_obtain = [
             'YawLeftButton',
@@ -373,7 +375,10 @@ class EDKeys:
                             self._sleep_responsive(hold, key)
                     else:
                         if self.key_def_hold_time > 0.0:
-                            sleep(self.key_def_hold_time)
+                            if self.randomness:
+                                sleep(self.key_def_hold_time * random.uniform(0.75, 1.5))
+                            else:
+                                sleep(self.key_def_hold_time)
 
                 if 'hold' in key:
                     sleep(0.1)
@@ -391,6 +396,9 @@ class EDKeys:
                 sleep(repeat_delay)
             else:
                 sleep(self.key_repeat_delay)
+            if self.randomness:
+                # Small, uneven gap between key presses (calibrated rotation holds are not changed)
+                sleep(random.uniform(0.0, 0.08))
 
     def release_all_keys(self):
         """Release all modifier keys and any currently tracked key presses to prevent stuck keys.

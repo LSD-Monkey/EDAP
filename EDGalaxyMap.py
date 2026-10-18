@@ -181,8 +181,8 @@ class EDGalaxyMap:
             ap.keys.send('UI_Select')  # Select >| button
             sleep(self.SystemSelectDelay)
 
-            # zoom camera which puts focus back on the map
-            ap.keys.send('CamZoomIn')
+            # Note: the former CamZoomIn step (to put focus back on the map) was removed, the plot
+            # hold below works directly after selecting the search result.
             sleep(0.5)
 
             # plot route. Not that once the system has been selected, as shown in the info panel

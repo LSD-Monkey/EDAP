@@ -636,6 +636,7 @@ class EDAutopilot:
         if self.keys:
             self.keys.activate_window = self.config['ActivateEliteEachKey']
             self.keys.pause_when_unfocused = self.config['PauseWhenUnfocused']
+            self.keys.randomness = self.config['EnableRandomness']
             self.keys.key_mod_delay = self.config['Key_ModDelay']
             self.keys.key_def_hold_time = self.config['Key_DefHoldTime']
             self.keys.key_repeat_delay = self.config['Key_RepeatDelay']
@@ -1516,6 +1517,7 @@ class EDAutopilot:
 
     def undock(self):
         """ Performs menu action to undock from Station """
+        self.random_pause(3.0)
         # Go to cockpit view
         self.ship_control.goto_cockpit_view()
 
@@ -2122,6 +2124,7 @@ class EDAutopilot:
                 logger.error('Not ready to FSD jump. jump=err1')
                 raise Exception('not ready to jump')
             sleep(0.5)
+            self.random_pause(1.5)
             logger.debug('jump= start fsd')
 
             # Initiate FSD Jump
@@ -2486,6 +2489,7 @@ class EDAutopilot:
             self.start_sco_monitoring()
             return True
 
+        self.random_pause(1.5)
         self.set_throttle_100()
 
         # While Mass Locked, keep boosting.
@@ -3227,6 +3231,14 @@ class EDAutopilot:
 
     def set_randomness(self, enable=False):
         self.config["EnableRandomness"] = enable
+        self.keys.randomness = enable
+
+    def random_pause(self, max_sec: float = 2.0, min_sec: float = 0.0):
+        """ Optional random pause (EnableRandomness) so actions do not happen with a fixed rhythm. """
+        if self.config.get("EnableRandomness", False):
+            t = random.uniform(min_sec, max_sec)
+            logger.debug(f"random_pause: {t:.2f}s")
+            sleep(t)
 
     def set_activate_elite_eachkey(self, enable=False):
         self.config["ActivateEliteEachKey"] = enable

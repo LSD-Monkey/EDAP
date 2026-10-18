@@ -227,6 +227,8 @@ class EDWayPoint:
         if len(sell_commodities) == 0 and len(buy_commodities) == 0 and len(global_buy_commodities) == 0:
             return
 
+        ap.random_pause(4.0, 1.0)  # optional (EnableRandomness): do not start trading at a fixed time after docking
+
         # Does this place have commodities service?
         # From the journal, this works for stations (incl. outpost), colonisation ship and megaships
         if ap.jn.ship_state()['StationServices'] is not None:

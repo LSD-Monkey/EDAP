@@ -1,3 +1,8 @@
+# 10/18/2026 v1.9.4 b12
+- Galaxy Map: removed the CamZoomIn step before plotting the route.
+- Enable Randomness extended: varied default key hold times and small gaps between key presses (calibrated
+  rotation holds unchanged), random pauses before undocking, supercruise entry, FSD jump and trading.
+
 # 10/18/2026 v1.9.4 b11
 - Galaxy Map: opening waits on Status.json GuiFocus (fast) instead of 15 s OCR of 'CARTOGRAPHICS'.
 - Galaxy Map: waiting for the Nav Route no longer hangs forever (20 s timeout, max. 5 targets tried, CPU busy loop
