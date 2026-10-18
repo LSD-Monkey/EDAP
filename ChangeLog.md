@@ -1,7 +1,8 @@
 # 10/18/2026 v1.9.4 b12
 - Galaxy Map: route plotting rebuilt from a recorded session: >| selects the 1st search result (each further
   press the next), then 2x UI_Right, 7x UI_Down (PLOT ROUTE), UI_Select. If the route goes to a wrong system
-  the map is reopened and the next search result is used (max. 5).
+  the map is reopened and the next search result is used (max. 5). Waits for the SYSTEM INFORMATION panel
+  (OCR, else 3 s) before moving right, slower key gaps; CARTOGRAPHICS region widened for 21:9.
 - Enable Randomness extended: varied default key hold times and small gaps between key presses (calibrated
   rotation holds unchanged), random pauses before undocking, supercruise entry, FSD jump and trading.
 

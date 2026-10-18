@@ -26,7 +26,9 @@ class EDGalaxyMap:
         self.ap_ckb = cb
         # The rect is top left x, y, and bottom right x, y in fraction of screen resolution
         self.reg = {'full_panel': {'rect': [0.1, 0.1, 0.9, 0.9]},
-                    'cartographics': {'rect': [0.0, 0.0, 0.15, 0.15]},
+                    'cartographics': {'rect': [0.0, 0.0, 0.35, 0.12]},
+                    'system_info': {'rect': [0.55, 0.08, 0.92, 0.35]},  # 'SYSTEM INFORMATION' + system name
+                    'right_menu': {'rect': [0.70, 0.10, 0.95, 0.95]},  # icon column right of the info panel (tooltips)
                     }
         self.SystemSelectDelay = 0.5  # Delay selecting the system when in galaxy map
 
@@ -155,16 +157,29 @@ class EDGalaxyMap:
 
             self._search_system(ap, target_name_uc)
 
-            # >| button: 1st press shows the 1st result, each further press the next result
+            # >| button: 1st press shows the 1st result, each further press the next result.
+            # The map flies to the system and opens the SYSTEM INFORMATION panel, that takes a few seconds.
+            # The following UI_Right only reaches the panel once it is open.
             for _ in range(result_no):
                 ap.keys.send('UI_Select')
                 sleep(max(self.SystemSelectDelay, 1.0))
+            if self.ocr.wait_for_text(ap, ["SYSTEM INFORMATION"], self.reg['system_info'], timeout=6):
+                logger.debug("System information panel is open.")
+                sleep(0.5)
+            else:
+                logger.debug("System information panel not confirmed by OCR, waiting 3s.")
+                sleep(3.0)
 
-            # Right side panel -> PLOT ROUTE -> select
-            ap.keys.send('UI_Right', repeat=2)
-            sleep(0.3)
-            ap.keys.send('UI_Down', repeat=7)
-            sleep(0.3)
+            # Right side: 1x right = info panel, 2x right = icon column -> 7x down = PLOT ROUTE -> select
+            ap.keys.send('UI_Right')
+            sleep(0.5)
+            ap.keys.send('UI_Right')
+            sleep(0.5)
+            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.25)
+            sleep(0.5)
+            if not self.ocr.wait_for_text(ap, ["PLOT ROUTE"], self.reg['right_menu'], timeout=2):
+                logger.debug("'PLOT ROUTE' tooltip not confirmed by OCR.")
+                self._save_debug_screenshot('galmap_before_plot')
             ap.keys.send('UI_Select')
 
             if ap.nav_route is None:
