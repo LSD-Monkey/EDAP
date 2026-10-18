@@ -137,13 +137,13 @@ class EDGalaxyMap:
             ap.keys.send('GalaxyMapOpen')
             return True
 
-        # Sequence recorded in game (session 2026-10-18_22-51-01):
-        #   search field -> type name -> ENTER -> >| button -> UI_Select (jumps to the 1st result; every
-        #   further UI_Select on >| jumps to the NEXT result) -> 2x UI_Right (right side panel)
-        #   -> 7x UI_Down ('PLOT ROUTE') -> UI_Select.
-        # The first result is often not the wanted system (e.g. 'COLONIA' -> 'EOL PROU LW-L C8-75' first).
-        # If the plotted route goes to a wrong system, the map is closed and the search is repeated with one
-        # more >| press, so the focus always starts from a known position.
+        # Sequence recorded in game (session 2026-10-18_23-17-36, the one that plotted the route):
+        #   UI_Up, UI_Select (open search field) -> type name -> wait for the suggestion list below the field
+        #   -> UI_Down (highlight 1st suggestion) -> UI_Select (map flies to the system, SYSTEM INFORMATION
+        #   panel opens) -> UI_Right (icon column right of the panel) -> 7x UI_Down ('PLOT ROUTE') -> UI_Select.
+        # Do NOT press ENTER in the search field: ENTER jumps to the system as well, but the UI loses the focus
+        # and all following arrow keys do nothing (that was the reason the route was never plotted).
+        # If the plotted route goes to a wrong system, the map is reopened and the next suggestion is used.
         for result_no in range(1, 6):
             if result_no > 1:
                 # Reopen the map so the focus starts at a known position again
@@ -153,36 +153,25 @@ class EDGalaxyMap:
                     return False
 
             last_nav_route_sys_uc = ap.nav_route.get_last_system().upper() if ap.nav_route is not None else ""
-            logger.debug(f"Previous Nav Route dest: {last_nav_route_sys_uc}. Search result no. {result_no}.")
+            logger.debug(f"Previous Nav Route dest: {last_nav_route_sys_uc}. Search suggestion no. {result_no}.")
 
             self._search_system(ap, target_name_uc)
 
-            # >| button: 1st press shows the 1st result, each further press the next result.
-            # The map flies to the system and opens the SYSTEM INFORMATION panel, that takes a few seconds.
-            # The following UI_Right only reaches the panel once it is open.
-            for _ in range(result_no):
-                ap.keys.send('UI_Select')
-                sleep(max(self.SystemSelectDelay, 1.0))
-            if self.ocr.wait_for_text(ap, ["SYSTEM INFORMATION"], self.reg['system_info'], timeout=6):
-                logger.debug("System information panel is open.")
-                sleep(0.5)
-            else:
-                logger.debug("System information panel not confirmed by OCR, waiting 3s.")
-                sleep(3.0)
+            # Highlight suggestion no. result_no in the list below the search field and select it
+            ap.keys.send('UI_Down', repeat=result_no, repeat_delay=0.3)
+            sleep(0.3)
+            ap.keys.send('UI_Select')
+            # The map flies to the system and opens the SYSTEM INFORMATION panel
+            sleep(max(self.SystemSelectDelay, 3.0))
 
-            # Right side: 1x right = info panel, 2x right = icon column. Extra presses do no harm (the icon
-            # column is the right most element, the top icon the upper most), they make the start position
-            # independent of where the focus was: 8x right + 8x up = top icon of the right column.
-            # From there 7x down = PLOT ROUTE -> select.
-            ap.keys.send('UI_Right', repeat=8, repeat_delay=0.3)
+            # Icon column right of the info panel. Extra presses do no harm (right most element / top icon), so
+            # the start position is the top icon independent of where the focus was. Then 7x down = PLOT ROUTE.
+            ap.keys.send('UI_Right', repeat=3, repeat_delay=0.3)
+            sleep(0.3)
+            ap.keys.send('UI_Up', repeat=8, repeat_delay=0.2)
+            sleep(0.3)
+            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.3)
             sleep(0.5)
-            ap.keys.send('UI_Up', repeat=8, repeat_delay=0.25)
-            sleep(0.5)
-            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.25)
-            sleep(0.5)
-            if not self.ocr.wait_for_text(ap, ["PLOT ROUTE"], self.reg['right_menu'], timeout=2):
-                logger.debug("'PLOT ROUTE' tooltip not confirmed by OCR.")
-                self._save_debug_screenshot('galmap_before_plot')
             ap.keys.send('UI_Select')
 
             if ap.nav_route is None:
@@ -192,7 +181,7 @@ class EDGalaxyMap:
             logger.debug("Waiting for Nav Route to update.")
             wait_start = time.time()
             curr_nav_route_sys_uc = last_nav_route_sys_uc
-            while time.time() - wait_start < 20:
+            while time.time() - wait_start < 15:
                 sleep(0.5)
                 curr_nav_route_sys_uc = ap.nav_route.get_last_system().upper()
                 if curr_nav_route_sys_uc != last_nav_route_sys_uc:
@@ -208,7 +197,7 @@ class EDGalaxyMap:
                                        f"Screenshot saved in debug-output.")
                 ap.keys.send('GalaxyMapOpen')
                 return False
-            logger.debug(f"Nav Route went to wrong system {curr_nav_route_sys_uc}, trying next search result.")
+            logger.debug(f"Nav Route went to wrong system {curr_nav_route_sys_uc}, trying next suggestion.")
         else:
             self._save_debug_screenshot('galmap_wrong_target')
             self.ap_ckb('log+vce', f"Unable to plot a route to {target_name_uc} in the Galaxy Map.")
@@ -222,29 +211,16 @@ class EDGalaxyMap:
 
     def _search_system(self, ap, target_name_uc: str):
         """ Galaxy Map must be open with the focus near the search bar (after goto_galaxy_map).
-        Types the name into the search field and moves the focus to the >| button. """
+        Opens the search field, types the name and waits for the suggestion list. No ENTER (see above). """
         ap.keys.send('UI_Up')
-        sleep(0.1)
-        ap.keys.send('UI_Select')  # open search field
-        sleep(0.3)
-
-        typewrite(target_name_uc, interval=0.25)
-        logger.debug(f"Entered system name: {target_name_uc}.")
         sleep(0.2)
-
-        # ENTER closes the input field
-        ap.keys.send_key('Down', 28)  # 28=ENTER
-        sleep(0.05)
-        ap.keys.send_key('Up', 28)
+        ap.keys.send('UI_Select')  # open search field
         sleep(0.5)
 
-        # Reselect the search box (ENTER does not always do it), then go right to the >| button
-        ap.keys.send('UI_Down')
-        sleep(0.1)
-        ap.keys.send('UI_Up')
-        sleep(0.1)
-        ap.keys.send('UI_Right')
-        sleep(0.2)
+        typewrite(target_name_uc, interval=0.2)
+        logger.debug(f"Entered system name: {target_name_uc}.")
+        # The suggestion list needs a moment ('TYPE AT LEAST 2 CHARACTERS...' is shown until it is ready)
+        sleep(2.5)
 
     def set_next_system(self, ap, target_system) -> bool:
         """ Sets the next system to jump to, or the final system to jump to.
@@ -291,10 +267,9 @@ class EDGalaxyMap:
             if not self.status_parser.wait_for_gui_focus(GuiFocusGalaxyMap, timeout=10):
                 logger.warning("Unable to open Galaxy Map")
                 return False
-            res = self.ocr.wait_for_text(self.ap, ["CARTOGRAPHICS"], self.reg['cartographics'], timeout=3)
-            if not res:
-                logger.debug("Galaxy Map open (GuiFocus), 'CARTOGRAPHICS' not confirmed by OCR")
-                sleep(1.5)  # Let the map finish loading before sending input
+            # No OCR check of the 'CARTOGRAPHICS' title any more: it took several seconds per try and did not
+            # work on 21:9 screens. GuiFocus is reliable, the map only needs a moment to accept input.
+            sleep(2.0)
 
             self.keys.send('UI_Up')  # Go up to search bar
             return True

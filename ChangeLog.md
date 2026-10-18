@@ -1,3 +1,10 @@
+# 10/18/2026 v1.9.4 b14
+- Galaxy Map: route plotting rebuilt from the recorded session that worked (2026-10-18_23-17-36):
+  search field -> type name -> wait for the suggestion list -> UI_Down + UI_Select (suggestion) -> UI_Right
+  (+ extra Right/Up to the top icon) -> 7x UI_Down (PLOT ROUTE) -> UI_Select. ENTER is no longer pressed in the
+  search field: it jumps to the system but the UI loses the focus, so all arrow keys after it did nothing.
+- Galaxy Map: removed the slow OCR checks (CARTOGRAPHICS, SYSTEM INFORMATION, PLOT ROUTE took 5-26 s each).
+
 # 10/18/2026 v1.9.4 b13
 - FIX: Extended keys (arrow keys, Home/End, Insert/Delete, PgUp/PgDn, right Ctrl/Alt) were sent with the raw
   DirectInput code (e.g. 0xCD), which Windows reads as a key release. They never reached the game. Now sent as
