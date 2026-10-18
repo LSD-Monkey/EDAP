@@ -1,3 +1,9 @@
+# 10/18/2026 v1.9.4 b7
+- Nav Panel tab detection: logs what OCR read, falls back to the position of the highlighted tab if OCR fails,
+  debug images are written again (test/nav-panel/out is created automatically).
+- SC Assist no longer silently falls back to the EDAP steered SC Assist when the in-game SCA cannot be activated
+  (ship has the module). New setting 'SCAssistFallbackManual' (default off).
+
 # 10/18/2026 v1.9.4 b6
 - Fix: a key binding with an unknown key name was stored as an empty binding. It looked valid but every send of it
   (e.g. HeadLookReset when opening the Nav Panel) and release_all_keys failed with "KeyError: 'key'", which

@@ -388,6 +388,7 @@ class EDAutopilot:
             "FleetCarrierMonitorCAPIDataPath": "",  # EDMC Fleet Carrier Monitor plugin data export path
             "AutoTuneRPYRates": False,  # Enable auto-tune for RPY rates.
             "PauseWhenUnfocused": True,  # Pause key input while Elite is not the active window
+            "SCAssistFallbackManual": False,  # Use the EDAP steered SC Assist if the in-game SCA cannot be activated
             "SCAssistTimeout": 3600,  # In-game SC Assist: max. time in secs to reach the destination (0 = no limit)
             "SCAssistAlign": True,  # In-game SC Assist: compass align (throttle 0) after activating the SCA
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
@@ -465,6 +466,8 @@ class EDAutopilot:
                 cnf['AutoTuneRPYRates'] = ""
             if 'PauseWhenUnfocused' not in cnf:
                 cnf['PauseWhenUnfocused'] = True
+            if 'SCAssistFallbackManual' not in cnf:
+                cnf['SCAssistFallbackManual'] = False
             if 'SCAssistTimeout' not in cnf:
                 cnf['SCAssistTimeout'] = 3600
             if 'SCAssistAlign' not in cnf:
@@ -2827,10 +2830,15 @@ class EDAutopilot:
         for activation in range(1, max_activations + 1):
             res = self._sc_assist_ingame_engage(scr_reg, target)
             if not res:
-                if activation == 1:
+                if activation == 1 and self.config['SCAssistFallbackManual']:
                     self.ap_ckb('log', f"Unable to activate in-game Supercruise Assist for '{target}'. "
                                        f"Using EDAP SC Assist.")
                     return self.sc_assist_manual(scr_reg, do_docking)
+                elif activation == 1:
+                    self.set_throttle_0()
+                    self.ap_ckb('log+vce', f"Unable to activate in-game Supercruise Assist for '{target}'. "
+                                           f"Check the Nav Panel calibration. Stopping.")
+                    return
                 else:
                     self.set_throttle_0()
                     self.ap_ckb('log+vce', "Unable to re-activate Supercruise Assist, terminating.")

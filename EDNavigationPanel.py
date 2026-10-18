@@ -166,6 +166,9 @@ class EDNavigationPanel:
         self._transform = None  # Warp transform to deskew the Nav panel
         self._rev_transform = None  # Reverse warp transform to skew to match the Nav panel
 
+        # Debug images of the panel are written here (cv2.imwrite silently fails if the folder does not exist)
+        os.makedirs('test/nav-panel/out', exist_ok=True)
+
         # Load custom regions from file
         load_calibrated_regions('EDNavigationPanel', self.reg)
 
@@ -319,43 +322,50 @@ class EDNavigationPanel:
 
         # Try this 'n' times before giving up
         tab_text = ""
+        tabs = [self.navigation_tab_text, self.transactions_tab_text, self.contacts_tab_text, self.target_tab_text]
         for i in range(10):
             # Is open, so proceed
             tab_bar = self.capture_tab_bar()
             if tab_bar is None:
                 return False, ""
 
+            # Find the highlighted (solid orange) tab
             item = Quad.from_rect(self.sub_reg['nav_pnl_tab']['rect'])
-            img_selected, _, ocr_textlist, quad = self.ocr.get_highlighted_item_data(tab_bar, item, 'nav panel')
-            if img_selected is not None:
+            img_selected, quad = self.ocr.get_highlighted_item_in_image(tab_bar, item)
+            if img_selected is None:
+                logger.debug(f"is_nav_panel_active: try {i + 1}: no highlighted tab found in the tab bar "
+                             f"(check the Nav Panel calibration, see test/nav-panel/out/tab_bar.png)")
+            else:
+                # 1. OCR of the highlighted tab
+                ocr_textlist = self.ocr.image_simple_ocr(img_selected, 'nav panel tab')
+                for tab in tabs:
+                    if tab != "?" and tab in str(ocr_textlist).upper():
+                        tab_text = tab
+                        break
+                logger.debug(f"is_nav_panel_active: try {i + 1}: OCR {ocr_textlist} at x={quad.left:.2f}-"
+                             f"{quad.right:.2f} -> '{tab_text}'")
+
+                # 2. Fallback: position of the highlighted tab. The tab bar always has the order
+                #    NAVIGATION | TRANSACTIONS | CONTACTS | > | TARGET
+                if tab_text == "":
+                    centre = (quad.left + quad.right) / 2
+                    idx = 0 if centre < 0.28 else 1 if centre < 0.49 else 2 if centre < 0.72 else 3
+                    tab_text = tabs[idx]
+                    logger.debug(f"is_nav_panel_active: OCR failed, tab from position (centre {centre:.2f}): "
+                                 f"'{tab_text}'")
+
                 if self.ap.debug_overlay:
                     tab_bar_quad = Quad.from_rect(self.sub_reg['tab_bar']['rect'])
-                    # Convert to a percentage of the nav panel
-                    quad.scale_from_origin(tab_bar_quad.width, tab_bar_quad.height)
-                    # quad.offset(tab_bar_quad.left, tab_bar_quad.top)
-
-                    # Transform the array of coordinates to the skew of the nav panel
-                    q_out = image_reverse_perspective_transform(self.panel, quad, self._rev_transform)
-                    # Offset to match the nav panel offset
+                    q = copy(quad)
+                    q.scale_from_origin(tab_bar_quad.width, tab_bar_quad.height)
+                    q_out = image_reverse_perspective_transform(self.panel, q, self._rev_transform)
                     q_out.offset(self.panel_quad_pix.left, self.panel_quad_pix.top)
-
-                    # Overlay OCR result
-                    self.ap.overlay.overlay_floating_text('nav_panel_item_text', f'{str(ocr_textlist)}', q_out.left, q_out.top - 25,                                                         (0, 255, 0))
+                    self.ap.overlay.overlay_floating_text('nav_panel_item_text', f'{tab_text}', q_out.left,
+                                                          q_out.top - 25, (0, 255, 0))
                     self.ap.overlay.overlay_quad_pix('nav_panel_item', q_out, (0, 255, 0), 2)
                     self.ap.overlay.overlay_paint()
 
-                # Test OCR string
-                if self.navigation_tab_text in str(ocr_textlist):
-                    tab_text = self.navigation_tab_text
-                    break
-                if self.transactions_tab_text in str(ocr_textlist):
-                    tab_text = self.transactions_tab_text
-                    break
-                if self.contacts_tab_text in str(ocr_textlist):
-                    tab_text = self.contacts_tab_text
-                    break
-                if self.target_tab_text in str(ocr_textlist):
-                    tab_text = self.target_tab_text
+                if tab_text != "":
                     break
 
             # Wait and retry
