@@ -1,3 +1,8 @@
+# 10/18/2026 v1.9.4 b13
+- FIX: Extended keys (arrow keys, Home/End, Insert/Delete, PgUp/PgDn, right Ctrl/Alt) were sent with the raw
+  DirectInput code (e.g. 0xCD), which Windows reads as a key release. They never reached the game. Now sent as
+  scancode + KEYEVENTF_EXTENDEDKEY. Affects every bind that uses an arrow key (e.g. UI_Up/Down/Left/Right).
+
 # 10/18/2026 v1.9.4 b12
 - Galaxy Map: route plotting rebuilt from a recorded session: >| selects the 1st search result (each further
   press the next), then 2x UI_Right, 7x UI_Down (PLOT ROUTE), UI_Select. If the route goes to a wrong system

@@ -312,16 +312,33 @@ class Input(ctypes.Structure):
 
 # Actual Functions
 
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+
+
+def _scan_and_flags(hexKeyCode):
+    """ DirectInput codes above 0x7F (arrow keys, Home, End, Insert, Delete, PgUp/PgDn, RCtrl, RAlt,
+    Numpad Enter, Numpad /) are 'extended' keys. SendInput needs them as the low 7 bit scancode plus the
+    EXTENDEDKEY flag. Sent unchanged (e.g. 0xCD for Right Arrow) Windows sees bit 7 as a key RELEASE of
+    another key, so the game never received the arrow keys. """
+    if hexKeyCode > 0x7F:
+        return hexKeyCode & 0x7F, KEYEVENTF_SCANCODE | KEYEVENTF_EXTENDEDKEY
+    return hexKeyCode, KEYEVENTF_SCANCODE
+
+
 def PressKey(hexKeyCode):
+    scan, flags = _scan_and_flags(hexKeyCode)
     extra = ctypes.c_ulong(0)
     ii_ = Input_I()
-    ii_.ki = KeyBdInput(0, hexKeyCode, 0x0008, 0, ctypes.pointer(extra))
+    ii_.ki = KeyBdInput(0, scan, flags, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(1), ii_)
     ctypes.windll.user32.SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
 
 def ReleaseKey(hexKeyCode):
+    scan, flags = _scan_and_flags(hexKeyCode)
     extra = ctypes.c_ulong(0)
     ii_ = Input_I()
-    ii_.ki = KeyBdInput(0, hexKeyCode, 0x0008 | 0x0002, 0, ctypes.pointer(extra))
+    ii_.ki = KeyBdInput(0, scan, flags | KEYEVENTF_KEYUP, 0, ctypes.pointer(extra))
     x = Input(ctypes.c_ulong(1), ii_)
     ctypes.windll.user32.SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
