@@ -1,3 +1,9 @@
+# 10/18/2026 v1.9.4 b8
+- Waypoint/Single Waypoint: with the Supercruise Assist module, supercruise_to_station no longer requires a visible
+  compass before starting SC Assist (it often is not visible after arriving in a system).
+- SC Assist uses the exact in-game destination name from Status.json when it matches the waypoint station name
+  (e.g. after a bookmark selected it).
+
 # 10/18/2026 v1.9.4 b7
 - Nav Panel tab detection: logs what OCR read, falls back to the position of the highlighted tab if OCR fails,
   debug images are written again (test/nav-panel/out is created automatically).

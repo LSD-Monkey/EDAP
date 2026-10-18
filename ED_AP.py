@@ -2570,7 +2570,15 @@ class EDAutopilot:
         # Ensure we are in supercruise
         self.sc_engage(False)
 
-        # Successful targeting of Station, lets go to it
+        # With the in-game Supercruise Assist the destination is selected in the Nav Panel by sc_assist() itself,
+        # so the compass does not need to be visible here (it often is not, e.g. target behind us or sun glare).
+        if self.jn.ship_state()['has_supercruise_assist']:
+            self.ap_ckb('log', " - Station: " + station_name)
+            self.update_ap_status(f"SC to Station: {station_name}")
+            self.sc_assist(scr_reg, dst_name=station_name)
+            return True
+
+        # EDAP steered SC Assist needs the compass
         sleep(3)  # Wait for compass to stop flashing blue!
         if self.have_destination(scr_reg):
             self.ap_ckb('log', " - Station: " + station_name)
@@ -2809,7 +2817,13 @@ class EDAutopilot:
             self.ap_ckb('log', "No Supercruise Assist module fitted, using EDAP SC Assist.")
             return self.sc_assist_manual(scr_reg, do_docking)
 
-        target = dst_name if dst_name else self.nav_panel.get_status_destination()
+        # Prefer the exact in-game name (Status.json) if it is the requested destination, e.g. after a bookmark
+        # selected it. The waypoint name may be written differently than shown in the Nav Panel.
+        status_dest = self.nav_panel.get_status_destination()
+        if status_dest and (not dst_name or destination_names_match(status_dest, dst_name)):
+            target = status_dest
+        else:
+            target = dst_name
         if not target:
             self.ap_ckb('log', "Quiting SC Assist - No destination selected.")
             logger.debug("Quiting sc_assist - no destination in Status.json")
