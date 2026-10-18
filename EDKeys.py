@@ -198,6 +198,31 @@ class EDKeys:
         else:
             return direct_input_keys
 
+    def get_primary_scancode(self, key_binding: str):
+        """ Scancode of the PRIMARY keyboard key of a bind (EDAP normally uses the secondary one).
+        Example: UI_Down primary = S, secondary = Down Arrow. Returns None if there is none. """
+        try:
+            latest_bindings = self.get_latest_keybinds()
+            if not latest_bindings:
+                return None
+            for item in parse(latest_bindings).getroot():
+                if item.tag == key_binding and item[0].attrib.get('Device', '').strip() == "Keyboard":
+                    return SCANCODE.get(item[0].attrib.get('Key'))
+        except Exception as e:
+            logger.warning(f"get_primary_scancode({key_binding}): {e}")
+        return None
+
+    def tap_scancode(self, scancode: int, hold: float = 0.15):
+        """ Press and release a raw scancode (waits for the Elite window focus like send()). """
+        if not self.activate_window:
+            self.wait_for_focus()
+        PressKey(scancode)
+        try:
+            sleep(hold)
+        finally:
+            ReleaseKey(scancode)
+        sleep(self.key_repeat_delay)
+
     def get_bindings_dict(self) -> dict[str, Any]:
         """Returns a dict of all the elite keybindings.
         @return: A dictionary of the keybinds file.

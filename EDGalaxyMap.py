@@ -12,6 +12,7 @@ from time import sleep
 import cv2
 from EDlogger import logger
 from pyautogui import typewrite
+from directinput import SCANCODE
 
 
 class EDGalaxyMap:
@@ -163,6 +164,14 @@ class EDGalaxyMap:
             ap.keys.send('UI_Select')
             # The map flies to the system and opens the SYSTEM INFORMATION panel
             sleep(max(self.SystemSelectDelay, 3.0))
+
+            # After selecting, the UI has no focus and arrow keys alone do nothing (seen in the recordings and
+            # screenshots). In the recorded successful run a press of 'S' (primary key of UI_Down) brought the
+            # UI focus back, after that the arrow keys worked. So tap the primary key of UI_Down once.
+            wake = ap.keys.get_primary_scancode('UI_Down') or SCANCODE['Key_S']
+            logger.debug(f"Galaxy Map: tap primary UI_Down key (scancode {wake}) to restore the UI focus.")
+            ap.keys.tap_scancode(wake)
+            sleep(0.5)
 
             # Icon column right of the info panel. Extra presses do no harm (right most element / top icon), so
             # the start position is the top icon independent of where the focus was. Then 7x down = PLOT ROUTE.

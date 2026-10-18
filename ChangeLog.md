@@ -3,6 +3,8 @@
   search field -> type name -> wait for the suggestion list -> UI_Down + UI_Select (suggestion) -> UI_Right
   (+ extra Right/Up to the top icon) -> 7x UI_Down (PLOT ROUTE) -> UI_Select. ENTER is no longer pressed in the
   search field: it jumps to the system but the UI loses the focus, so all arrow keys after it did nothing.
+- Galaxy Map: after selecting the suggestion the primary key of UI_Down (S) is tapped once to bring the UI focus
+  back (as in the recorded successful run), only then the arrow keys are used.
 - Galaxy Map: removed the slow OCR checks (CARTOGRAPHICS, SYSTEM INFORMATION, PLOT ROUTE took 5-26 s each).
 
 # 10/18/2026 v1.9.4 b13
