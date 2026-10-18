@@ -181,8 +181,8 @@ class EDGalaxyMap:
             ap.keys.send('UI_Select')  # Select >| button
             sleep(self.SystemSelectDelay)
 
-            # Plot route via the system info panel: 2x right, 7x down to 'PLOT ROUTE', then select.
-            ap.keys.send('UI_Right', repeat=2)
+            # Plot route via the system info panel: 4x right, 7x down to 'PLOT ROUTE', then select.
+            ap.keys.send('UI_Right', repeat=4)
             sleep(0.2)
             ap.keys.send('UI_Down', repeat=7)
             sleep(0.2)
