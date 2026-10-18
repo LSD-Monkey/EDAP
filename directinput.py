@@ -263,7 +263,17 @@ SCANCODE = {
   "??_251": 251,
   "??_252": 252,
   "??_253": 253,
-  "??_254": 254
+  "??_254": 254,
+  # Key names written by Elite for German (de-DE) keyboard layouts, mapped to their physical scan codes.
+  "Key_ß": 12,
+  "Key_Acute": 13,
+  "Key_ü": 26,
+  "Key_Plus": 27,
+  "Key_ö": 39,
+  "Key_ä": 40,
+  "Key_Circumflex": 41,
+  "Key_Hash": 43,
+  "Key_LessThan": 86
 }
 
 

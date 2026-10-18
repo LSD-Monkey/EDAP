@@ -3327,6 +3327,7 @@ class EDAutopilot:
                 self._release_keys_safe()
             except Exception as e:
                 logger.debug("FSD Assist trapped generic:"+str(e))
+                self.ap_ckb('log', "FSD Assist stopped with error: "+str(e))
                 print("Trapped generic:"+str(e))
                 traceback.print_exc()
 
@@ -3359,6 +3360,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:"+str(e))
                 logger.debug("SC Assist trapped generic:"+str(e))
+                self.ap_ckb('log', "SC Assist stopped with error: "+str(e))
                 traceback.print_exc()
 
             self.stop_sco_monitoring()
@@ -3384,6 +3386,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:"+str(e))
                 logger.debug("Waypoint Assist trapped generic:"+str(e))
+                self.ap_ckb('log', "Waypoint Assist stopped with error: "+str(e))
                 traceback.print_exc()
 
             self.stop_sco_monitoring()
@@ -3403,6 +3406,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:"+str(e))
                 logger.debug("Robigo Assist trapped generic:"+str(e))
+                self.ap_ckb('log', "Robigo Assist stopped with error: "+str(e))
                 traceback.print_exc()
 
             self.stop_sco_monitoring()
@@ -3420,6 +3424,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:" + str(e))
                 logger.debug("AFK Combat Assist trapped generic:" + str(e))
+                self.ap_ckb('log', "AFK Combat Assist stopped with error: " + str(e))
                 traceback.print_exc()
 
             self.stop_sco_monitoring()
@@ -3439,6 +3444,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:" + str(e))
                 logger.debug("DSS Assist trapped generic:" + str(e))
+                self.ap_ckb('log', "DSS Assist stopped with error: " + str(e))
                 traceback.print_exc()
 
             self.dss_assist_enabled = False
@@ -3455,6 +3461,7 @@ class EDAutopilot:
             except Exception as e:
                 print("Trapped generic:" + str(e))
                 logger.debug("Single Waypoint Assist trapped generic:" + str(e))
+                self.ap_ckb('log', "Single Waypoint Assist stopped with error: " + str(e))
                 traceback.print_exc()
 
             self.stop_sco_monitoring()

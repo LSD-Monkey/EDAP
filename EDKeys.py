@@ -181,9 +181,13 @@ class EDKeys:
                             binding['mods'].append(SCANCODE[mod])
                         if hold is not None:
                             binding['hold'] = True
-                except KeyError:
-                    print("Unrecognised key '" + (
-                        json.dumps(binding) if binding else '?') + "' for bind '" + item.tag + "'")
+                except KeyError as e:
+                    # Unknown key name (e.g. a layout specific key). Do not store a half-filled binding, it would
+                    # look like a valid binding and fail later with KeyError 'key'.
+                    logger.warning(f"Unrecognised key {e} for bind '{item.tag}' - binding ignored.")
+                    self.ap_ckb('log', f"WARNING: Key {e} used for '{item.tag}' is not supported by EDAP. "
+                                       f"Please bind '{item.tag}' to another key.")
+                    binding = None
                 if binding is not None:
                     direct_input_keys[item.tag] = binding
 

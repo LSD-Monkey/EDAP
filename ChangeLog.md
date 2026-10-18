@@ -1,3 +1,11 @@
+# 10/18/2026 v1.9.4 b6
+- Fix: a key binding with an unknown key name was stored as an empty binding. It looked valid but every send of it
+  (e.g. HeadLookReset when opening the Nav Panel) and release_all_keys failed with "KeyError: 'key'", which
+  stopped SC Assist right after "throttle 0". Unknown keys are now ignored with a warning.
+- Added the German (de-DE) key names Key_ä, Key_ö, Key_ü, Key_ß, Key_Acute, Key_Circumflex, Key_Plus, Key_Hash,
+  Key_LessThan to the scan code table.
+- Assist errors are now also shown in the EDAP log window (previously only in the debug log).
+
 # 10/18/2026 v1.9.4 b5
 - SC Assist flow changed: enter supercruise, throttle 0, activate the in-game SCA, then align to the destination
   while standing still, then let the in-game SCA fly and drop. Setting renamed to 'SCAssistAlign'
