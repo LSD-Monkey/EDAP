@@ -76,6 +76,7 @@ class EDKeys:
             'CamTranslateForward',
             'CamTranslateRight',
             'OrderAggressiveBehaviour',
+            'FocusLeftPanel',  # Opens the left (Nav) panel directly (alternative to UIFocus + UI_Left)
         ]
         self.keys = self.get_bindings()
         self.bindings = self.get_bindings_dict()
@@ -252,6 +253,10 @@ class EDKeys:
         latest_bindings = max(list_of_bindings, key=getmtime)
         logger.info(f'Latest keybindings file:{latest_bindings}')
         return latest_bindings
+
+    def has_binding(self, key_binding: str) -> bool:
+        """ Returns True if the given ED binding has a usable keyboard key. """
+        return self.keys.get(key_binding) is not None
 
     def send_key(self, type, key):
         # Focus Elite window if configured

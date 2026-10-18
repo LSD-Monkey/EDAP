@@ -19,7 +19,20 @@
 * If reached destination system then terminate, however if we still have a target to a Station, then auto-enable SC Assist
   else have not reach destination, so issue FSD and loop 
  
-## SC Assist Flow
+## SC Assist Flow (in-game Supercruise Assist module fitted)
+* Leave space station if docked, enter supercruise if necessary.
+* Destination = waypoint station name, else the current destination in Status.json.
+* If not locked: Nav Panel > NAVIGATION > find destination (OCR) > LOCK DESTINATION. Compass align.
+* Nav Panel > NAVIGATION > find destination > UI_Select (details) > UI_Right > UI_Select (SUPERCRUISE ASSIST).
+  Verify via Status.json Destination.Name. Close panel.
+* Hands off (no flight keys, SCO/disengage monitoring stopped). Monitor:
+  * SupercruiseDestinationDrop + in normal space -> arrived
+  * Interdiction -> submit/escape, re-activate SCA
+  * 'SUPERCRUISE ASSIST ACTIVE' OCR (optional) disappears after it was seen -> re-activate SCA
+  * Dropped elsewhere / destination changed / timeout -> throttle 0, stop
+* Dock as below.
+
+## SC Assist Flow (no Supercruise Assist module, fallback)
 * Leave space station if docked.
 * Enter supercruise if necessary.
 * Loop: 

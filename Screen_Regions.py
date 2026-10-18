@@ -359,6 +359,9 @@ def load_default_calib_data() -> dict[str, MyRegion]:
         "Screen_Regions.full_panel.subregion.sco": {"rect": [0.42, 0.65, 0.60, 0.80],
                                                     "text": "The area above the radar where the supercruise overdrive active message appears.",
                                                     "readonly": False},
+        "Screen_Regions.full_panel.subregion.sca_active": {"rect": [0.38, 0.26, 0.62, 0.42],
+                                                           "text": "The area at the top of the HUD where 'SUPERCRUISE ASSIST ACTIVE' appears.",
+                                                           "readonly": False},
         "Screen_Regions.full_panel.subregion.fss": {"rect": [0.5045, 0.7545, 0.532, 0.7955],
                                                     "text": "Should be replaced with the FSS screen regions.",
                                                     "readonly": False},
@@ -527,6 +530,9 @@ class Screen_Regions:
                            'filter': self.blue_sco_color_range}
         self.reg['fss'] = {'rect': [0.5045, 0.7545, 0.532, 0.7955], 'width': 1, 'height': 1, 'filterCB': self.equalize,
                            'filter': None}
+        # 'SUPERCRUISE ASSIST ACTIVE' text (light grey text with a blue triangle above the canopy, top center of HUD)
+        self.reg['sca_active'] = {'rect': [0.38, 0.26, 0.62, 0.42], 'width': 1, 'height': 1, 'filterCB': None,
+                                  'filter': None}
         self.reg['mission_dest'] = {'rect': [0.46, 0.38, 0.65, 0.86], 'width': 1, 'height': 1,
                                     'filterCB': self.equalize, 'filter': None}
         self.reg['missions'] = {'rect': [0.50, 0.78, 0.65, 0.85], 'width': 1, 'height': 1, 'filterCB': self.equalize,
@@ -543,6 +549,7 @@ class Screen_Regions:
                         'disengage': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'sco': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'fss': {'rect': [0.0, 0.0, 0.0, 0.0]},
+                        'sca_active': {'rect': [0.38, 0.26, 0.62, 0.42]},
                         'mission_dest': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'missions': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'nav_panel': {'rect': [0.25, 0.36, 0.60, 0.85]},  # For Robigo

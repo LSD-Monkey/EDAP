@@ -11,8 +11,14 @@ For the FSD Route Assist, you select your destination in the GalaxyMap and then 
 executing route assistance it will perform detailed system scanning (honk) when jumping into a system and optionally perform FSS scanning
 to determine if Earth, Water, or Ammonia type world is present.
 ### Supercruise Assist
-The supercruise (SC) assistant (and not using ED's SC Assist which takes up a slot, for a piece of software?) 
-will keep you on target and when "TO DISENGAGE" is presented and will autodrop out of SC and perform autodocking with the targeted Station. <br>
+If your ship has the in-game **Supercruise Assist (SCA)** module fitted, EDAP uses it: it selects the destination in the
+Nav Panel, aligns the ship roughly with the compass, activates the game's SCA (Nav Panel > destination > SUPERCRUISE ASSIST)
+and then lets the game fly. EDAP sends no flight keys while the SCA flies; it only monitors the journal/status (arrival,
+interdiction, timeout) and afterwards performs autodocking with the targeted station.<br>
+The destination is the station given by the waypoint, otherwise the current in-game destination from Status.json.
+If the ship has no SCA module, or the destination cannot be found in the Nav Panel, EDAP falls back to its own SC Assist,
+which keeps you on target and drops out of SC when "TO DISENGAGE" is presented.<br>
+See [Supercruise Assist](SupercruiseAssist.md) for details and required key bindings.<br>
 ### Waypoint Assist
 With Waypoint Assist you define the route in a file and this assist will jump to those waypoints.  If a Station is defined to dock at, the assistant will transition to SC Assist and
 dock with the station.  A early version of a trading capability is also included.<br>

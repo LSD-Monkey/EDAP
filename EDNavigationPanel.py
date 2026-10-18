@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
+import re
+import time
 from copy import copy
 from time import sleep
 
@@ -90,6 +93,31 @@ def image_reverse_perspective_transform(image, src_quad: Quad, rev_transform) ->
     # Create a quad from the points
     q_out = Quad.from_list(pts)
     return q_out
+
+
+def normalize_destination_name(name: str | None) -> str:
+    """ Normalizes a destination name for comparison (upper case, only letters/digits, single spaces).
+    The Nav Panel shows names in upper case, Status.json in mixed case, OCR may add/drop punctuation.
+    """
+    if not name:
+        return ""
+    name = re.sub(r"[^0-9A-Z]+", " ", name.upper())
+    return " ".join(name.split())
+
+
+def destination_names_match(name_a: str | None, name_b: str | None, sim_match: float = 0.8) -> bool:
+    """ Returns True if two destination names are equal or similar enough (0.0 - 1.0). """
+    a = normalize_destination_name(name_a)
+    b = normalize_destination_name(name_b)
+    if a == "" or b == "":
+        return False
+    if a == b:
+        return True
+    # Partial names, e.g. 'JAQUES' for 'JAQUES STATION' (whole words only, min. 4 chars)
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) >= 4 and f" {shorter} " in f" {longer} ":
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= sim_match
 
 
 def rects_to_quadrilateral(rect_tlbr: Quad, rect_bltr: Quad) -> Quad:
@@ -250,12 +278,18 @@ class EDNavigationPanel:
         else:
             print("Open Nav Panel")
             self.ap.ship_control.goto_cockpit_view()
-            self.keys.send("HeadLookReset")
+            if self.keys.has_binding("HeadLookReset"):
+                self.keys.send("HeadLookReset")
 
-            self.keys.send('UIFocus', state=1)
-            self.keys.send('UI_Left')
-            self.keys.send('UIFocus', state=0)
-            sleep(0.5)
+            if self.keys.has_binding('FocusLeftPanel'):
+                # Direct binding (default key '1'). Works without UIFocus/HeadLookReset being bound.
+                self.keys.send('FocusLeftPanel')
+            else:
+                self.keys.send('UIFocus', state=1)
+                self.keys.send('UI_Left')
+                self.keys.send('UIFocus', state=0)
+            # Wait for the panel open animation, inputs sent during the animation may be lost.
+            sleep(1.0)
 
             # Check if it opened
             active, active_tab_name = self.is_panel_active()
@@ -410,6 +444,63 @@ class EDNavigationPanel:
 
         self.hide_panel()
         return found
+
+    def get_status_destination(self) -> str:
+        """ Returns the current in-game destination name from Status.json ('' if none).
+        Note: ED does not always clear this when a destination is unlocked. """
+        status = self.status_parser.get_cleaned_data()
+        return status.get('Destination_Name', '') or ''
+
+    def destination_matches(self, dst_name: str, sim_match: float = 0.8) -> bool:
+        """ True if the in-game destination (Status.json) matches dst_name. """
+        return destination_names_match(self.get_status_destination(), dst_name, sim_match)
+
+    def wait_for_destination(self, dst_name: str, timeout: float = 5.0) -> bool:
+        """ Waits until the Status.json destination matches dst_name. Status.json lags the game by ~0.5-1 s. """
+        start = time.time()
+        while (time.time() - start) < timeout:
+            if self.destination_matches(dst_name):
+                return True
+            sleep(0.25)
+        return False
+
+    def activate_supercruise_assist(self, dst_name: str) -> bool:
+        """ Selects dst_name in the Nav Panel (NAVIGATION tab) and activates the in-game Supercruise Assist.
+
+        The details view of a list entry has the same buttons for all destination types
+        (stations, carriers, bodies, signal sources):
+            [ LOCK DESTINATION ] [ SUPERCRUISE ASSIST ]
+                          BACK
+        LOCK DESTINATION is pre-selected. Selecting SUPERCRUISE ASSIST also locks the destination, which is
+        verified via Status.json (Destination.Name). In normal space the game then charges the FSD itself.
+
+        Returns True if the destination is locked afterwards, else False. Panel is closed in all cases.
+        """
+        res = self.show_navigation_tab()
+        if not res:
+            logger.warning("activate_supercruise_assist: Nav Panel could not be opened")
+            self.hide_panel()
+            return False
+
+        found = self.find_destination_in_list(dst_name)
+        if not found:
+            logger.warning(f"activate_supercruise_assist: '{dst_name}' not found in Nav Panel list")
+            self.hide_panel()
+            return False
+
+        self.keys.send("UI_Select")  # Open the details view of the destination
+        sleep(0.8)  # Details view animation
+        self.keys.send("UI_Right")  # LOCK DESTINATION -> SUPERCRUISE ASSIST
+        sleep(0.3)
+        self.keys.send("UI_Select")  # Activate Supercruise Assist (also locks the destination)
+
+        locked = self.wait_for_destination(dst_name, timeout=5.0)
+        if not locked:
+            logger.warning(f"activate_supercruise_assist: Status.json destination is "
+                           f"'{self.get_status_destination()}', expected '{dst_name}'")
+
+        self.hide_panel()
+        return locked
 
     def request_docking(self) -> bool:
         """ Try to request docking with OCR.
