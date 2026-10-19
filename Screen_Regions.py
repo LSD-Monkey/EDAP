@@ -533,6 +533,9 @@ class Screen_Regions:
         # 'SUPERCRUISE ASSIST ACTIVE' text (light grey text with a blue triangle above the canopy, top center of HUD)
         self.reg['sca_active'] = {'rect': [0.38, 0.26, 0.62, 0.42], 'width': 1, 'height': 1, 'filterCB': None,
                                   'filter': None}
+        # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' (orange text across the screen center, target behind a planet)
+        self.reg['sca_no_los'] = {'rect': [0.25, 0.38, 0.75, 0.62], 'width': 1, 'height': 1, 'filterCB': None,
+                                  'filter': None}
         self.reg['mission_dest'] = {'rect': [0.46, 0.38, 0.65, 0.86], 'width': 1, 'height': 1,
                                     'filterCB': self.equalize, 'filter': None}
         self.reg['missions'] = {'rect': [0.50, 0.78, 0.65, 0.85], 'width': 1, 'height': 1, 'filterCB': self.equalize,
@@ -550,6 +553,7 @@ class Screen_Regions:
                         'sco': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'fss': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'sca_active': {'rect': [0.38, 0.26, 0.62, 0.42]},
+                        'sca_no_los': {'rect': [0.25, 0.38, 0.75, 0.62]},
                         'mission_dest': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'missions': {'rect': [0.0, 0.0, 0.0, 0.0]},
                         'nav_panel': {'rect': [0.25, 0.36, 0.60, 0.85]},  # For Robigo

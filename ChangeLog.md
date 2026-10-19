@@ -1,3 +1,8 @@
+# 10/19/2026 v1.9.4 b17
+- In-game SC Assist: detects 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' (target behind a planet/star, OCR region
+  'sca_no_los', seen twice in a row). Then: throttle 0, pitch up 90 deg, full throttle for 'SCAssistNoLOSEscapeTime'
+  (20 s), throttle 0, re-activate the SCA (aligns to the target again). Max. activations raised from 3 to 5.
+
 # 10/19/2026 v1.9.4 b16
 - FIX: Nav Panel scroll_to_top_of_list() held UI_Up until the OCR of the selected row was stable. With slow OCR
   this took 30 s, and if no highlighted row was found it hung forever with UI_Up held (seen when activating the

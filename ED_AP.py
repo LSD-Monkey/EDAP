@@ -77,6 +77,7 @@ class SCAssistResult(Enum):
     Arrived = 0  # Dropped out of supercruise at the destination
     Reengage = 1  # In-game SC Assist needs to be activated again
     Failed = 2  # Dropped elsewhere, destination changed or timeout
+    NoLineOfSight = 3  # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': target behind a planet/star
 
 
 class FSDAssistReturn(Enum):
@@ -392,6 +393,7 @@ class EDAutopilot:
             "SCAssistTimeout": 3600,  # In-game SC Assist: max. time in secs to reach the destination (0 = no limit)
             "SCAssistAlign": True,  # In-game SC Assist: compass align (throttle 0) after activating the SCA
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
+            "SCAssistNoLOSEscapeTime": 20,  # In-game SC Assist: seconds to fly 'up' when the target is behind a body
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
         # a default value or an error will occur reading the new value!
@@ -474,6 +476,8 @@ class EDAutopilot:
                 cnf['SCAssistAlign'] = cnf.get('SCAssistAlignBeforeActivate', True)
             if 'SCAssistCheckActiveOCR' not in cnf:
                 cnf['SCAssistCheckActiveOCR'] = True
+            if 'SCAssistNoLOSEscapeTime' not in cnf:
+                cnf['SCAssistNoLOSEscapeTime'] = 20
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -2844,7 +2848,7 @@ class EDAutopilot:
         self.sc_engage(False)
         self.jn.ship_state()['interdicted'] = False
 
-        max_activations = 3
+        max_activations = 5
         for activation in range(1, max_activations + 1):
             res = self._sc_assist_ingame_engage(scr_reg, target)
             if not res:
@@ -2869,6 +2873,12 @@ class EDAutopilot:
             if result == SCAssistResult.Arrived:
                 break
             elif result == SCAssistResult.Reengage:
+                self.ap_ckb('log', "Re-activating Supercruise Assist.")
+                continue
+            elif result == SCAssistResult.NoLineOfSight:
+                # Target behind a planet/star: a plain re-activation does not help. Fly 'up' out of the shadow
+                # first, the re-activation then aligns to the target again.
+                self._sc_assist_escape_no_los()
                 self.ap_ckb('log', "Re-activating Supercruise Assist.")
                 continue
             else:  # Failed
@@ -2937,6 +2947,9 @@ class EDAutopilot:
         last_ocr_time = time.time()  # First check after ocr_interval, the text needs time to appear
         ocr_not_active_cnt = 0
         ocr_confirmed = False
+        check_los = True
+        last_los_time = time.time()
+        los_cnt = 0
 
         while True:
             sleep(0.5)
@@ -2981,6 +2994,20 @@ class EDAutopilot:
                 self.ap_ckb('log', f"Destination changed to '{cur_dest}', terminating SC Assist.")
                 return SCAssistResult.Failed
 
+            # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': the SCA can not reach the target (behind a body)
+            if check_los and in_sc and (time.time() - last_los_time) >= ocr_interval:
+                last_los_time = time.time()
+                no_los = self.sc_assist_no_los_ocr(scr_reg)
+                if no_los is None:
+                    check_los = False  # Not supported (no locale text)
+                elif no_los:
+                    los_cnt += 1
+                    if los_cnt >= 2:  # seen twice in a row, avoid reacting on a single OCR hit
+                        self.ap_ckb('log+vce', "Target obstructed, no line of sight.")
+                        return SCAssistResult.NoLineOfSight
+                else:
+                    los_cnt = 0
+
             # Optional OCR check of the 'SUPERCRUISE ASSIST ACTIVE' HUD text
             if check_ocr and in_sc and (time.time() - last_ocr_time) >= ocr_interval:
                 last_ocr_time = time.time()
@@ -3009,6 +3036,40 @@ class EDAutopilot:
             if 0 < timeout < (time.time() - start_time):
                 self.ap_ckb('log', f"SC Assist timeout ({timeout} s).")
                 return SCAssistResult.Failed
+
+    def _sc_assist_escape_no_los(self):
+        """ Target is behind a planet/star ('MOVE TO OBTAIN LINE OF SIGHT TO TARGET'):
+        throttle 0, pitch up 90 deg, fly 'SCAssistNoLOSEscapeTime' seconds (default 20) in this direction,
+        throttle 0. The following SCA re-activation aligns to the target again. """
+        escape_time = self.config.get('SCAssistNoLOSEscapeTime', 20)
+        self.update_ap_status("Escape: no line of sight")
+        self.ap_ckb('log+vce', f"No line of sight to target, pitching up and flying {escape_time} seconds.")
+        self.set_throttle_0()
+        sleep(1)
+        self.ship_control.pitch_up_down(90)
+        self.set_throttle_100()
+        sleep(escape_time)
+        self.set_throttle_0()
+        sleep(2)
+
+    def sc_assist_no_los_ocr(self, scr_reg) -> bool | None:
+        """ Checks the HUD for 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' (target behind a body).
+        Returns True if found, False if not, None if the check is not possible (no locale text). """
+        msg = self.locale["SC_ASSIST_NO_LOS_MSG"]
+        if not msg or msg == '?':
+            return None
+        if self.status.get_gui_focus() != GuiFocusNoFocus:
+            return False
+        image = self.scr.get_screen_region(scr_reg.reg['sca_no_los']['rect'])
+        # TODO delete this line when COLOR_RGB2BGR is removed from get_screen()
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        ocr_textlist = self.ocr.image_simple_ocr(image, 'sca_no_los')
+        if ocr_textlist is None:
+            return False
+        text = " ".join(str(t) for t in ocr_textlist).upper().replace(" ", "")
+        found = "LINEOFSIGHT" in text or self.ocr.string_similarity(msg, str(ocr_textlist)) > 0.6
+        logger.debug(f"SC Assist no line of sight check: {str(ocr_textlist)} -> {found}")
+        return found
 
     def sc_assist_active_ocr(self, scr_reg) -> bool | None:
         """ Checks the HUD for the 'SUPERCRUISE ASSIST ACTIVE' text.

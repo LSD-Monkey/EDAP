@@ -1,6 +1,7 @@
 {
     "PRESS_TO_DISENGAGE_MSG": "?",
     "SC_ASSIST_ACTIVE_MSG": "?",
+    "SC_ASSIST_NO_LOS_MSG": "?",
 
     "INT_PNL_TAB_MODULES": "?",
     "INT_PNL_TAB_FIRE_GROUPS": "?",

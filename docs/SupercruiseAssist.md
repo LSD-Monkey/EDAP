@@ -43,6 +43,7 @@ If the ship has **no SCA module**, or the destination cannot be found in the Nav
 | `SCAssistTimeout` | `3600` | Max. seconds to reach the destination (0 = no limit). |
 | `SCAssistAlign` | `true` | Align to the destination with the compass (throttle 0) after activating the SCA. |
 | `SCAssistCheckActiveOCR` | `true` | Check the HUD for *SUPERCRUISE ASSIST ACTIVE* (English locale only, `SC_ASSIST_ACTIVE_MSG`). |
+| `SCAssistNoLOSEscapeTime` | `20` | If *MOVE TO OBTAIN LINE OF SIGHT TO TARGET* is shown (target behind a planet/star, OCR region `sca_no_los`, English locale `SC_ASSIST_NO_LOS_MSG`): throttle 0, pitch up 90°, fly this many seconds, throttle 0, then re-activate the SCA (which aligns to the target again). |
 
 ## Calibration
 The screen region `Screen_Regions.full_panel.subregion.sca_active` (top center of the HUD) is added to
