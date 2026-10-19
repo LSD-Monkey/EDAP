@@ -43,6 +43,8 @@ from ED_AP import *
 from EDAPWaypointEditor import WaypointEditorTab
 
 from EDlogger import logger
+from Screen import set_focus_elite_window
+from time import sleep
 from RPYLineEditor import line_editor
 
 """
@@ -307,6 +309,13 @@ class APGui:
         """ Thread safe entry point for messages from the autopilot. """
         if threading.current_thread() is self._main_thread:
             self._callback_main(msg, body)
+        elif msg in ('log', 'log+vce'):
+            # Write the log file and speak right away in the calling thread (correct timestamps, nothing lost if
+            # the GUI is busy), only the list box update is done in the Tk main thread.
+            logger.info(body)
+            if msg == 'log+vce':
+                self.ed_ap.vce.say(body)
+            self._cb_queue.put(('_gui_log', body))
         else:
             self._cb_queue.put((msg, body))
 
@@ -326,7 +335,9 @@ class APGui:
             self.root.after(100, self._process_cb_queue)
 
     def _callback_main(self, msg, body=None):
-        if msg == 'log':
+        if msg == '_gui_log':
+            self.log_msg(body, write_log=False)
+        elif msg == 'log':
             self.log_msg(body)
         elif msg == 'log+vce':
             self.log_msg(body)
@@ -632,8 +643,21 @@ class APGui:
     def open_logfile(self):
         os.startfile('autopilot.log')
 
-    def log_msg(self, msg):
+    def log_msg(self, msg, write_log: bool = True):
         message = datetime.now().strftime("%H:%M:%S: ") + msg
+        if not write_log:
+            # Already written to the log file by the calling thread
+            try:
+                if self.gui_loaded:
+                    while not self.log_buffer.empty():
+                        self.msgList.insert(tk.END, self.log_buffer.get())
+                    self.msgList.insert(tk.END, message)
+                    self.msgList.yview(tk.END)
+                else:
+                    self.log_buffer.put(message)
+            except Exception:
+                self.log_buffer.put(message)
+            return
 
         try:
             if not self.gui_loaded:
@@ -663,14 +687,44 @@ class APGui:
         self.status.configure(text="Status: " + txt)
         self.log_msg(f"Status update: {txt}")
 
+    def _assist_running(self) -> bool:
+        ap = self.ed_ap
+        return any([ap.fsd_assist_enabled, ap.sc_assist_enabled, ap.waypoint_assist_enabled,
+                    ap.robigo_assist_enabled, ap.afk_combat_assist_enabled, ap.dss_assist_enabled])
+
+    def _run_ship_action(self, name: str, func):
+        """ Runs a ship action started by a GUI button (throttle, Align to Target, ...) in a background thread.
+        Before, these ran in the Tk main thread: the key sender waits while Elite is not the active window, and
+        after clicking the button the EDAP window IS the active window, so the GUI froze (white window) until
+        Elite was clicked again. Elite is brought to the front first. Not allowed while an assist is running
+        (two threads steering the ship at the same time). """
+        if self._assist_running():
+            self.log_msg(f"'{name}' is not possible while an assist is running. Stop the assist first.")
+            return
+        if getattr(self, '_ship_action_thread', None) is not None and self._ship_action_thread.is_alive():
+            self.log_msg(f"'{name}': the previous ship action is still running.")
+            return
+
+        def worker():
+            try:
+                set_focus_elite_window()
+                sleep(0.3)
+                func()
+            except Exception as e:
+                logger.exception(f"Ship action '{name}' failed")
+                self.callback('log', f"'{name}' failed: {e}")
+
+        self._ship_action_thread = threading.Thread(target=worker, name=f"ShipAction-{name}", daemon=True)
+        self._ship_action_thread.start()
+
     def ship_throttle_0(self):
-        self.ed_ap.set_throttle_0()
+        self._run_ship_action('0% Throttle', self.ed_ap.set_throttle_0)
 
     def ship_throttle_50(self):
-        self.ed_ap.set_throttle_50()
+        self._run_ship_action('50% Throttle', self.ed_ap.set_throttle_50)
 
     def ship_throttle_100(self):
-        self.ed_ap.set_throttle_100()
+        self._run_ship_action('100% Throttle', self.ed_ap.set_throttle_100)
 
     def edit_roll_curve(self):
         # Get current ship roll curve
@@ -728,7 +782,7 @@ class APGui:
         Aligns to the target for tuning.
         @return: N/A
         """
-        self.ed_ap.compass_align(self.ed_ap.scrReg)
+        self._run_ship_action('Align to Target', lambda: self.ed_ap.compass_align(self.ed_ap.scrReg))
 
     def save_settings(self):
         self.entry_update(None)

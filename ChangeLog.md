@@ -1,3 +1,13 @@
+# 10/19/2026 v1.9.4 b21
+- FIX GUI freeze (white window): the GUI buttons '0/50/100% Throttle' and 'Align to Target' ran in the Tk main
+  thread. After clicking a button the EDAP window is the active window, so the key sender paused ('Elite is not
+  the active window') inside the GUI thread and the window froze until Elite was clicked again. 'Align to
+  Target' clicked during a running assist also steered in parallel to the assist. Now these actions run in a
+  background thread, bring Elite to the front first and are refused while an assist is running.
+- EDKeys.wait_for_focus never blocks the Tk main thread (brings Elite to the front instead).
+- Log lines from worker threads are written to autopilot.log immediately in the calling thread (correct order
+  and timestamps); only the GUI list update is queued for the main thread.
+
 # 10/19/2026 v1.9.4 b20
 - FIX crashes: callbacks from worker threads (engine, SCO monitoring, key sender/focus pause, hotkeys) changed
   Tk widgets directly. Tkinter is not thread safe; with several threads logging at the same time (typically

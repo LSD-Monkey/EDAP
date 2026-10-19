@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from os import environ, listdir
 import os
 from os.path import getmtime, isfile, join
@@ -273,7 +274,7 @@ class EDKeys:
 
     # Note:  this routine will grab the *.binds file which is the latest modified
     def get_latest_keybinds(self):
-        path_bindings = environ['LOCALAPPDATA'] + "\Frontier Developments\Elite Dangerous\Options\Bindings"
+        path_bindings = environ["LOCALAPPDATA"] + r"\Frontier Developments\Elite Dangerous\Options\Bindings"
         try:
             list_of_bindings = [join(path_bindings, f) for f in listdir(path_bindings) if
                                 isfile(join(path_bindings, f)) and f.endswith('.binds')]
@@ -304,6 +305,12 @@ class EDKeys:
         another window. Key presses would otherwise go to the wrong window. Returns the paused time in seconds.
         Stays interruptible, so the stop button still works while paused. """
         if not self._pause_active() or self.elite_has_focus():
+            return 0.0
+        if threading.current_thread() is threading.main_thread():
+            # Never block the GUI (Tk main thread): it would freeze (white window) while the EDAP window has focus.
+            # Bring Elite to the front instead.
+            set_focus_elite_window()
+            sleep(0.3)
             return 0.0
         start = monotonic()
         logger.info("Elite Dangerous is not the active window - key input paused.")
