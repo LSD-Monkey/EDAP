@@ -7,6 +7,7 @@ from RPYLineEditor import convert_curve_to_float, convert_curve_to_str, closest_
 from Screen import set_focus_elite_window
 from StatusParser import StatusParser
 from time import sleep
+import time
 from EDlogger import logger
 
 
@@ -100,79 +101,78 @@ class EDShipControl:
             return False
         return True
 
-    def add_to_roll_curve(self, angle: float, rate: float):
-        """
-        Add a point to the current curve of the current ship.
-        @param angle: The angle to add in degrees.
-        @param rate: The rate of movement to move that angle in deg/seconds.
-        @return: N/A
-        """
-        if angle > 100.0 or not self._rate_ok(rate, 'Roll'):
-            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
-            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
-            logger.debug(f"Auto-tune: ignored Roll point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
+    AUTOSAVE_INTERVAL = 20.0  # seconds between automatic saves of learned (auto-tune) curves
+
+    def _add_to_curve(self, axis: str, curve_key: str, angle: float, rate: float):
+        """ Adds/updates a point of the current RPY curve (auto-tune).
+        - Implausible points are ignored (compass front/back ambiguity at large angles, key not reaching the game).
+        - An existing point is blended 50/50 with the new measurement instead of being overwritten, so one bad
+          measurement can not ruin the curve and the values converge over several movements.
+        - The ship config is saved automatically (at most every AUTOSAVE_INTERVAL s). """
+        if angle > 100.0 or not self._rate_ok(rate, axis):
+            logger.debug(f"Auto-tune: ignored {axis} point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
             return
         throttle = self.get_throttle_demand_dict()
-        if throttle:
-            c = convert_curve_to_float(throttle['RollRate'])
-            # Add the new item. Conversion will sort them.
-            a = closest_angle(angle)
-            c[a] = round(rate, 2)
-            # Convert back to str which will sort the values automatically.
-            s = convert_curve_to_str(c)
-            throttle['RollRate'] = s
+        if not throttle:
+            return
+        c = convert_curve_to_float(throttle[curve_key])
+        a = closest_angle(angle)
+        old = c.get(a)
+        new = rate if old is None else 0.5 * old + 0.5 * rate
+        c[a] = round(new, 2)
+        throttle[curve_key] = convert_curve_to_str(c)  # conversion sorts the points
+        if old is None:
+            self.ap_ckb('log', f'Added a point to the {self.ap.speed_demand} {axis} curve at {a} deg, '
+                               f'{round(new, 2)} deg/s.')
+        else:
+            self.ap_ckb('log', f'Updated the {self.ap.speed_demand} {axis} curve at {a} deg: '
+                               f'{round(old, 2)} -> {round(new, 2)} deg/s (measured {round(rate, 2)}).')
+        self._autosave_curves()
 
-            self.ap_ckb('log', f'Added a point to the {self.ap.speed_demand} '
-                               f'Roll curve at {a} deg, {round(rate, 2)} deg/s.')
+    def _autosave_curves(self):
+        """ Saves the learned curves to configs/ship_configs.json (throttled). Before, learned values were only
+        kept in memory and lost on restart unless 'Save All Settings' was clicked. """
+        now = time.time()
+        if now - getattr(self, '_last_autosave', 0.0) < self.AUTOSAVE_INTERVAL:
+            return
+        self._last_autosave = now
+        try:
+            self.ap.update_ship_configs()
+            logger.debug("Auto-tune: ship configuration saved.")
+        except Exception as e:
+            logger.warning(f"Auto-tune: could not save the ship configuration: {e}")
+
+    def _settled_offset(self, axis_key: str, min_wait: float, auto_tune: bool):
+        """ Reads the compass/target offset after a movement. With auto-tune the reading is repeated until the
+        ship has stopped turning: heavy ships (Type-9, Cutter, ...) keep rotating for a while after the key is
+        released. Measuring too early made the learned rate too low, every following correction too long and the
+        ship oscillated around the target (e.g. yaw +6/-6 deg for a minute). """
+        sleep(min_wait)
+        off = self.ap.get_compass_target_offset()
+        if not auto_tune or not off:
+            return off
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            sleep(0.25)
+            off2 = self.ap.get_compass_target_offset()
+            if not off2:
+                break
+            if abs(off2[axis_key] - off[axis_key]) < 0.3:
+                return off2
+            off = off2
+        return off
+
+    def add_to_roll_curve(self, angle: float, rate: float):
+        """ Add/update a point of the roll curve of the current ship (deg, deg/s). """
+        self._add_to_curve('Roll', 'RollRate', angle, rate)
 
     def add_to_pitch_curve(self, angle: float, rate: float):
-        """
-        Add a point to the current curve.
-        @param angle: The angle to add in degrees.
-        @param rate: The rate of movement to move that angle in deg/seconds.
-        @return: N/A
-        """
-        if angle > 100.0 or not self._rate_ok(rate, 'Pitch'):
-            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
-            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
-            logger.debug(f"Auto-tune: ignored Pitch point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
-            return
-        throttle = self.get_throttle_demand_dict()
-        if throttle:
-            c = convert_curve_to_float(throttle['PitchRate'])
-            # Add the new item. Conversion will sort them.
-            a = closest_angle(angle)
-            c[a] = round(rate, 2)
-            # Convert back to str which will sort the values automatically.
-            s = convert_curve_to_str(c)
-            throttle['PitchRate'] = s
-
-            self.ap_ckb('log', f'Added a point to the {self.ap.speed_demand} '
-                               f'Pitch curve at {a} deg, {round(rate, 2)} deg/s.')
+        """ Add/update a point of the pitch curve of the current ship (deg, deg/s). """
+        self._add_to_curve('Pitch', 'PitchRate', angle, rate)
 
     def add_to_yaw_curve(self, angle: float, rate: float):
-        """
-        Add a point to the current curve.
-        @param angle: The angle to add in degrees.
-        @param rate: The rate of movement to move that angle in deg/seconds.
-        @return: N/A
-        """
-        if angle > 100.0 or not self._rate_ok(rate, 'Yaw'):
-            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
-            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
-            logger.debug(f"Auto-tune: ignored Yaw point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
-            return
-        throttle = self.get_throttle_demand_dict()
-        if throttle:
-            c = convert_curve_to_float(throttle['YawRate'])
-            # Add the new item. Conversion will sort them.
-            a = closest_angle(angle)
-            c[a] = round(rate, 2)
-            # Convert back to str which will sort the values automatically.
-            s = convert_curve_to_str(c)
-            throttle['YawRate'] = s
-            self.ap_ckb('log', f'Added a point to the {self.ap.speed_demand} '
-                               f'Yaw curve at {a} deg, {round(rate, 2)} deg/s.')
+        """ Add/update a point of the yaw curve of the current ship (deg, deg/s). """
+        self._add_to_curve('Yaw', 'YawRate', angle, rate)
 
     def get_throttle_demand_dict(self) -> ThrottleDemand | None:
         """
@@ -277,10 +277,9 @@ class EDShipControl:
         # Wait for ship to stabilize. Calc the delay from the angle 0 - 45 deg = 0.1 - 0.75 Sec. 45 deg is where the
         # rate no longer increases.
         dly = scale(abs_deg, 0.0, 45.0, 0.5, 1.0, True)
-        sleep(dly)
 
-        # Take current reading
-        off = self.ap.get_compass_target_offset()
+        # Take current reading (with auto-tune: after the ship has stopped turning)
+        off = self._settled_offset('roll', dly, auto_tune)
         if off:
             # Are we still too far away?
             err = sp - off['roll']
@@ -373,10 +372,9 @@ class EDShipControl:
         # Wait for ship to stabilize. Calc the delay from the angle 0 - 30 deg = 0.1 - 0.5 Sec. 30 deg is where the
         # rate no longer increases.
         dly = scale(abs_deg, 0.0, 30.0, 0.5, 0.75, True)
-        sleep(dly)
 
-        # Take current reading
-        off = self.ap.get_compass_target_offset()
+        # Take current reading (with auto-tune: after the ship has stopped turning)
+        off = self._settled_offset('pit', dly, auto_tune)
         if off:
             # Are we still too far away?
             err = sp - off['pit']
@@ -470,10 +468,9 @@ class EDShipControl:
         # Wait for ship to stabilize. Calc the delay from the angle 0 - 30 deg = 0.1 - 0.4 Sec. 30 deg is where the
         # rate no longer increases.
         dly = scale(abs_deg, 0.0, 30.0, 0.5, 0.75, True)
-        sleep(dly)
 
-        # Take current reading
-        off = self.ap.get_compass_target_offset()
+        # Take current reading (with auto-tune: after the ship has stopped turning)
+        off = self._settled_offset('yaw', dly, auto_tune)
         if off:
             # Are we still too far away?
             err = sp - off['yaw']

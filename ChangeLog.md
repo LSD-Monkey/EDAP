@@ -1,3 +1,12 @@
+# 10/19/2026 v1.9.4 b22
+- Auto-tune RPY reworked:
+  - The result of a movement is measured after the ship has stopped turning (compass reading stable, max. 3 s).
+    It was measured 0.5-0.75 s after the key release; heavy ships still turn then, so the learned rate was too
+    low and the ship kept oscillating around the target.
+  - New measurements are blended 50/50 with an existing curve point instead of overwriting it.
+  - Learned curves are saved to configs/ship_configs.json automatically (max. every 20 s). Before they were lost
+    on restart unless 'Save All Settings' was clicked.
+
 # 10/19/2026 v1.9.4 b21
 - FIX GUI freeze (white window): the GUI buttons '0/50/100% Throttle' and 'Align to Target' ran in the Tk main
   thread. After clicking a button the EDAP window is the active window, so the key sender paused ('Elite is not
