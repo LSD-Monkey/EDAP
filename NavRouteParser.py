@@ -100,6 +100,14 @@ class NavRouteParser:
         # print(json.dumps(data, indent=4))
         return data
 
+    def get_route_stamp(self) -> str:
+        """ Timestamp + event of the current NavRoute.json. Changes on every new plot or clear, also when the
+        same destination is plotted again. """
+        data = self.get_nav_route_data()
+        if data is None or self.current_data is None:
+            return ''
+        return f"{self.current_data.get('timestamp', '')}|{self.current_data.get('event', '')}"
+
     def get_last_system(self) -> str:
         """ Gets the final destination (system name) or empty string.
         """

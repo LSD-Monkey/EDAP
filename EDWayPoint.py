@@ -32,6 +32,7 @@ class EDWayPoint:
         self.filename = ''
         self.stats_log = {'Colonisation': 0, 'Construction': 0, 'Fleet Carrier': 0, 'Station': 0}
         self.waypoints = {}
+        self._replot_after_trade = False  # set after a trade: plot the route to the next system again
         self.num_waypoints = 0
         self.step = 0
         #  { "Ninabin": {"DockWithTarget": false, "TradeSeq": None, "Completed": false} }
@@ -564,14 +565,18 @@ class EDWayPoint:
                 # Check we have a route and that we have a destination to a star (body 0).
                 # We can have one without the other.
                 if ((last_nav_route_sys == next_wp_system) and
-                        (destination_body == 0 and destination_name != "")):
+                        (destination_body == 0 and destination_name != "") and not self._replot_after_trade):
                     # No need to target system
                     self.ap_ckb('log+vce', f"System already targeted.")
                 else:
                     self.ap_ckb('log+vce', f"Targeting system {next_wp_system}.")
                     # Select destination in galaxy map based on name
+                    # After a trade the ship is heavier/lighter: plot the route again (an old route may contain
+                    # jumps that are too long now -> 'FSD failed to charge').
                     res = self.ap.galaxy_map.set_gal_map_destination_text(self.ap, next_wp_system,
-                                                                          self.ap.jn.ship_state)
+                                                                          self.ap.jn.ship_state,
+                                                                          force=self._replot_after_trade)
+                    self._replot_after_trade = False
                     if res:
                         self.ap_ckb('log', f"System has been targeted.")
                     else:
@@ -697,6 +702,7 @@ class EDWayPoint:
                 # Docked - let do trade
                 self.ap_ckb('log+vce', f"Execute trade at Station: {next_wp_station}")
                 self.execute_trade(self.ap, dest_key)
+                self._replot_after_trade = True  # cargo mass changed -> jump range changed
 
             # Mark this waypoint as completed
             self.mark_waypoint_complete(dest_key)

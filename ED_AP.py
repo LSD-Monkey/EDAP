@@ -3090,7 +3090,13 @@ class EDAutopilot:
         ocr_textlist = self.ocr.image_simple_ocr(image, 'sca_active')
         if ocr_textlist is not None:
             sim = self.ocr.string_similarity(msg, str(ocr_textlist))
-        logger.debug(f"SC Assist active similarity with {str(ocr_textlist)} is {sim}")
+        # The region also contains other HUD text (body type, 'DISCOVERED ...'), so the similarity of the whole
+        # list drops below the limit although the text is there. Check for the text itself (spaces removed).
+        found_text = False
+        if ocr_textlist is not None:
+            joined = "".join(str(t) for t in ocr_textlist).upper().replace(" ", "")
+            found_text = msg.upper().replace(" ", "") in joined
+        logger.debug(f"SC Assist active similarity with {str(ocr_textlist)} is {sim}, text found: {found_text}")
 
         if self.debug_overlay:
             abs_rect = scr_reg.reg['sca_active']['rect']
@@ -3099,7 +3105,7 @@ class EDAutopilot:
                                                abs_rect[0], abs_rect[1] - 25, (0, 255, 0))
             self.overlay.overlay_paint()
 
-        return sim > sim_match
+        return found_text or sim > sim_match
 
     def _sc_assist_arrival(self, do_docking: bool):
         """ Called after we dropped out of supercruise at the destination. Docks if requested and possible,

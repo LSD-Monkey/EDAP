@@ -118,7 +118,8 @@ class ActivateSupercruiseAssistTestCase(unittest.TestCase):
         pnl.find_destination_in_list.return_value = False
         with _no_sleep():
             self.assertFalse(pnl.activate_supercruise_assist("Nowhere"))
-        self.assertEqual(pnl.keys.sent, [])  # nothing selected
+        self.assertEqual(pnl.keys.sent, ["UI_Back"])  # back to the list and one retry, nothing selected
+        self.assertEqual(pnl.find_destination_in_list.call_count, 2)
         pnl.hide_panel.assert_called()
 
     def test_destination_not_confirmed(self):

@@ -494,6 +494,14 @@ class EDNavigationPanel:
 
         found = self.find_destination_in_list(dst_name)
         if not found:
+            # The panel may have opened in the details view of the last destination (e.g. when re-activating
+            # the SCA), then there is no highlighted list row. UI_Back returns to the list, try once more.
+            logger.debug(f"activate_supercruise_assist: '{dst_name}' not found, UI_Back and retry once.")
+            self.keys.send("UI_Back")
+            sleep(0.5)
+            if self.show_navigation_tab():
+                found = self.find_destination_in_list(dst_name)
+        if not found:
             logger.warning(f"activate_supercruise_assist: '{dst_name}' not found in Nav Panel list")
             self.hide_panel()
             return False
@@ -618,6 +626,7 @@ class EDNavigationPanel:
             ocr_textlist = self.ocr.image_simple_ocr(img_selected)
             if ocr_textlist is not None:
                 sim = self.ocr.string_similarity(f"['{dst_name.upper()}']", str(ocr_textlist))
+                logger.debug(f"Nav Panel row {rows + 1}: {ocr_textlist} (similarity {sim:.2f})")
 
                 if self.ap.debug_overlay:
                     # Overlay OCR result

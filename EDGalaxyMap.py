@@ -80,12 +80,14 @@ class EDGalaxyMap:
 
         return False
 
-    def set_gal_map_destination_text(self, ap, target_name, target_select_cb=None) -> bool:
-        """ Call either the Odyssey or Horizons version of the Galactic Map sequence. """
+    def set_gal_map_destination_text(self, ap, target_name, target_select_cb=None, force: bool = False) -> bool:
+        """ Call either the Odyssey or Horizons version of the Galactic Map sequence.
+        force: plot again even if the current route already goes to target_name (e.g. after loading cargo the
+        jump range is lower and the old route may contain jumps that are now too long). """
         if not self.is_odyssey:
             return ap.galaxy_map.set_gal_map_destination_text_horizons(ap, target_name, target_select_cb)
         else:
-            return ap.galaxy_map.set_gal_map_destination_text_odyssey(ap, target_name)
+            return ap.galaxy_map.set_gal_map_destination_text_odyssey(ap, target_name, force=force)
 
     def set_gal_map_destination_text_horizons(self, ap, target_name, target_select_cb=None) -> bool:
         """ This sequence for the Horizons. """
@@ -122,7 +124,7 @@ class EDGalaxyMap:
         sleep(2)
         return True
 
-    def set_gal_map_destination_text_odyssey(self, ap, target_name) -> bool:
+    def set_gal_map_destination_text_odyssey(self, ap, target_name, force: bool = False) -> bool:
         """ This sequence for the Odyssey. """
         res = self.goto_galaxy_map()
         if not res:
@@ -133,10 +135,12 @@ class EDGalaxyMap:
         # Check if the current nav route is to the target system
         last_nav_route_sys = ap.nav_route.get_last_system()
         last_nav_route_sys_uc = last_nav_route_sys.upper()
-        if last_nav_route_sys_uc == target_name_uc:
+        if last_nav_route_sys_uc == target_name_uc and not force:
             # Close Galaxy map
             ap.keys.send('GalaxyMapOpen')
             return True
+        if force:
+            logger.debug(f"Galaxy Map: forced re-plot of the route to {target_name_uc}.")
 
         # Sequence recorded in game (session 2026-10-18_23-17-36, the one that plotted the route):
         #   UI_Up, UI_Select (open search field) -> type name -> wait for the suggestion list below the field
@@ -155,6 +159,7 @@ class EDGalaxyMap:
                     return False
 
             last_nav_route_sys_uc = ap.nav_route.get_last_system().upper() if ap.nav_route is not None else ""
+            last_stamp = ap.nav_route.get_route_stamp() if ap.nav_route is not None else ""
             logger.debug(f"Previous Nav Route dest: {last_nav_route_sys_uc}. Search suggestion no. {result_no}.")
 
             self._search_system(ap, target_name_uc)
@@ -186,18 +191,20 @@ class EDGalaxyMap:
                 break
 
             logger.debug("Waiting for Nav Route to update.")
-            wait_start = time.time()
-            curr_nav_route_sys_uc = last_nav_route_sys_uc
-            while time.time() - wait_start < 15:
+            changed, curr_nav_route_sys_uc = self._wait_nav_route_change(ap, last_stamp)
+            if changed and curr_nav_route_sys_uc == "" and last_nav_route_sys_uc == target_name_uc:
+                # PLOT ROUTE on a system that already has the route clears it (NavRouteClear).
+                # 'PLOT ROUTE' is still selected: press it once more to plot the new route.
+                logger.debug("Galaxy Map: route was cleared (same target), plotting again.")
+                last_stamp = ap.nav_route.get_route_stamp()
                 sleep(0.5)
-                curr_nav_route_sys_uc = ap.nav_route.get_last_system().upper()
-                if curr_nav_route_sys_uc != last_nav_route_sys_uc:
-                    break
+                ap.keys.send('UI_Select')
+                changed, curr_nav_route_sys_uc = self._wait_nav_route_change(ap, last_stamp)
 
-            if curr_nav_route_sys_uc == target_name_uc:
+            if changed and curr_nav_route_sys_uc == target_name_uc:
                 logger.debug(f"Nav Route correctly updated to {target_name_uc}.")
                 break
-            if curr_nav_route_sys_uc == last_nav_route_sys_uc:
+            if not changed:
                 # Nothing plotted at all -> the key sequence did not work, retrying will not help
                 self._save_debug_screenshot('galmap_no_route')
                 self.ap_ckb('log+vce', f"No route plotted to {target_name_uc} (Galaxy Map). "
@@ -215,6 +222,17 @@ class EDGalaxyMap:
         ap.keys.send('GalaxyMapOpen')
         sleep(0.5)
         return True
+
+    @staticmethod
+    def _wait_nav_route_change(ap, last_stamp: str, timeout: float = 15.0) -> tuple[bool, str]:
+        """ Waits until NavRoute.json changes (new plot or clear). Returns (changed, last system upper). """
+        wait_start = time.time()
+        while time.time() - wait_start < timeout:
+            sleep(0.5)
+            if ap.nav_route.get_route_stamp() != last_stamp:
+                sleep(0.3)  # file fully written
+                return True, ap.nav_route.get_last_system().upper()
+        return False, ap.nav_route.get_last_system().upper()
 
     def _search_system(self, ap, target_name_uc: str):
         """ Galaxy Map must be open with the focus near the search bar (after goto_galaxy_map).

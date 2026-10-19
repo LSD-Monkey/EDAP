@@ -1,3 +1,14 @@
+# 10/19/2026 v1.9.4 b18
+- FIX SC Assist: 'SUPERCRUISE ASSIST ACTIVE' was found by OCR, but the region also contained other HUD text
+  (body type, 'DISCOVERED ...'), so the similarity of the whole list was < 0.5 and EDAP re-activated the SCA
+  for no reason. Now the text itself is searched (spaces removed).
+- Nav Panel: if the destination is not found (e.g. panel opened in the details view), UI_Back and retry once.
+  Every list row is logged with its OCR text and similarity.
+- Waypoint Assist: after a trade the route to the next system is plotted again (cargo changes the jump range;
+  an old route made while empty caused 'FSD failed to charge' x3 with 752 t cargo). If the route already goes
+  to the target, PLOT ROUTE clears it first, it is then pressed a 2nd time. Route changes are detected via the
+  NavRoute.json timestamp (new NavRouteParser.get_route_stamp()).
+
 # 10/19/2026 v1.9.4 b17
 - In-game SC Assist: detects 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' (target behind a planet/star, OCR region
   'sca_no_los', seen twice in a row). Then: throttle 0, pitch up 90 deg, full throttle for 'SCAssistNoLOSEscapeTime'
