@@ -7,6 +7,7 @@ from RPYLineEditor import convert_curve_to_float, convert_curve_to_str, closest_
 from Screen import set_focus_elite_window
 from StatusParser import StatusParser
 from time import sleep
+from EDlogger import logger
 
 
 def scale(inp: float, in_min: float, in_max: float, out_min: float, out_max: float, clamp: bool) -> float:
@@ -71,6 +72,24 @@ class EDShipControl:
             return self.MAX_HOLD_TIME
         return htime
 
+    # Plausible rotation rates in deg/s (all ships). Values outside are measuring errors (compass front/back
+    # ambiguity at large angles, key press not reaching the game) or the result of extrapolating bad points.
+    RATE_LIMITS = {'Roll': (1.0, 200.0), 'Pitch': (0.5, 90.0), 'Yaw': (0.3, 60.0)}
+
+    def _rate_ok(self, rate: float, axis: str) -> bool:
+        lo, hi = self.RATE_LIMITS[axis]
+        return lo <= rate <= hi
+
+    def _htime(self, abs_deg: float, rate: float, axis: str) -> float:
+        """ Hold time for abs_deg with a rate from the curve. Implausible rates (e.g. 1440 deg/s from a corrupted
+        auto-tune curve) are clamped, otherwise the key is only tapped for 0.1 s and the ship never turns. """
+        lo, hi = self.RATE_LIMITS[axis]
+        if not (lo <= rate <= hi):
+            clamped = min(max(rate, lo), hi)
+            self.ap_ckb('log', f"{axis}: implausible rate {rate:.2f} deg/s from the ship curve, using {clamped:.1f}.")
+            rate = clamped
+        return abs_deg / rate
+
     def _tune_plausible(self, act_ang: float, demand_ang: float, axis: str) -> bool:
         """ Auto-tune sanity check. If the ship moved less than 10 % of the demanded angle, the key press most
         likely did not reach the game (window focus, admin rights, wrong binding). Learning a rate from that would
@@ -88,6 +107,11 @@ class EDShipControl:
         @param rate: The rate of movement to move that angle in deg/seconds.
         @return: N/A
         """
+        if angle > 100.0 or not self._rate_ok(rate, 'Roll'):
+            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
+            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
+            logger.debug(f"Auto-tune: ignored Roll point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
+            return
         throttle = self.get_throttle_demand_dict()
         if throttle:
             c = convert_curve_to_float(throttle['RollRate'])
@@ -108,6 +132,11 @@ class EDShipControl:
         @param rate: The rate of movement to move that angle in deg/seconds.
         @return: N/A
         """
+        if angle > 100.0 or not self._rate_ok(rate, 'Pitch'):
+            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
+            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
+            logger.debug(f"Auto-tune: ignored Pitch point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
+            return
         throttle = self.get_throttle_demand_dict()
         if throttle:
             c = convert_curve_to_float(throttle['PitchRate'])
@@ -128,6 +157,11 @@ class EDShipControl:
         @param rate: The rate of movement to move that angle in deg/seconds.
         @return: N/A
         """
+        if angle > 100.0 or not self._rate_ok(rate, 'Yaw'):
+            # The compass can not measure large angles reliably (front/back), and implausible rates would poison
+            # the curve (extrapolation made 1400 deg/s and negative rates from such points).
+            logger.debug(f"Auto-tune: ignored Yaw point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
+            return
         throttle = self.get_throttle_demand_dict()
         if throttle:
             c = convert_curve_to_float(throttle['YawRate'])
@@ -209,7 +243,7 @@ class EDShipControl:
                             self.ap_ckb('log',
                                         f"Roll demand: {round(deg, 1)}. Interp value: {round(ratio_val, 2)} deg/s")
 
-                            htime = abs_deg / ratio_val
+                            htime = self._htime(abs_deg, ratio_val, 'Roll')
 
                             last_deg1 = last_deg
                             last_val1 = last_val
@@ -228,7 +262,7 @@ class EDShipControl:
                         ratio_val = scale(abs_deg, last_deg1, last_deg, last_val1, last_val, False)
                         self.ap_ckb('log', f"Roll demand: {round(deg, 1)}. Extrap value: {round(ratio_val, 2)} deg/s")
 
-                        htime = abs_deg / ratio_val
+                        htime = self._htime(abs_deg, ratio_val, 'Roll')
 
         # Check if we are rolling right or left and perform the movement.
         htime = self._limit_hold_time(htime, 'Roll')
@@ -305,7 +339,7 @@ class EDShipControl:
                             self.ap_ckb('log',
                                         f"Pitch demand: {round(deg, 1)}. Interp value: {round(ratio_val, 2)} deg/s")
 
-                            htime = abs_deg / ratio_val
+                            htime = self._htime(abs_deg, ratio_val, 'Pitch')
 
                             last_deg1 = last_deg
                             last_val1 = last_val
@@ -324,7 +358,7 @@ class EDShipControl:
                         ratio_val = scale(abs_deg, last_deg1, last_deg, last_val1, last_val, False)
                         self.ap_ckb('log', f"Pitch demand: {round(deg, 1)}. Extrap value: {round(ratio_val, 2)} deg/s")
 
-                        htime = abs_deg / ratio_val
+                        htime = self._htime(abs_deg, ratio_val, 'Pitch')
 
         # Check if we are pitching up or down and perform the movement.
         htime = self._limit_hold_time(htime, 'Pitch')
@@ -401,7 +435,7 @@ class EDShipControl:
                             self.ap_ckb('log',
                                         f"Yaw demand: {round(deg, 1)}. Interp value: {round(ratio_val, 2)} deg/s")
 
-                            htime = abs_deg / ratio_val
+                            htime = self._htime(abs_deg, ratio_val, 'Yaw')
 
                             last_deg1 = last_deg
                             last_val1 = last_val
@@ -420,7 +454,7 @@ class EDShipControl:
                         ratio_val = scale(abs_deg, last_deg1, last_deg, last_val1, last_val, False)
                         self.ap_ckb('log', f"Yaw demand: {round(deg, 1)}. Extrap value: {round(ratio_val, 2)} deg/s")
 
-                        htime = abs_deg / ratio_val
+                        htime = self._htime(abs_deg, ratio_val, 'Yaw')
 
         # Check if we are yawing right or left and perform the movement.
         htime = self._limit_hold_time(htime, 'Yaw')

@@ -1344,7 +1344,34 @@ def apply_theme_to_titlebar(root):
         root.wm_attributes("-alpha", 1)
 
 
+def _enable_crash_logging():
+    """ Hard crashes (e.g. inside OCR/native libraries) end the process without a Python traceback in
+    autopilot.log. faulthandler writes the stack of all threads to crash.log in that case, and uncaught
+    Tk callback errors are logged instead of only printed to the console. """
+    import faulthandler
+    import traceback
+    from datetime import datetime
+    try:
+        f = open('crash.log', 'a', encoding='utf-8')
+        f.write(f"\n===== EDAP started {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+        f.flush()
+        faulthandler.enable(file=f, all_threads=True)
+        globals()['_crash_log_file'] = f  # keep the file open
+    except Exception as e:
+        logger.warning(f"Could not enable crash logging: {e}")
+
+    def _tk_error(exc, val, tb):
+        logger.error("GUI callback error: " + "".join(traceback.format_exception(exc, val, tb)))
+    tk.Tk.report_callback_exception = lambda self, exc, val, tb: _tk_error(exc, val, tb)
+
+    def _excepthook(exc, val, tb):
+        logger.error("Uncaught exception: " + "".join(traceback.format_exception(exc, val, tb)))
+        sys.__excepthook__(exc, val, tb)
+    sys.excepthook = _excepthook
+
+
 def main():
+    _enable_crash_logging()
     #   handle = win32gui.FindWindow(0, "Elite - Dangerous (CLIENT)")
     #   if handle != None:
     #       win32gui.SetForegroundWindow(handle)  # put the window in foreground

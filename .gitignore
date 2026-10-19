@@ -24,3 +24,4 @@ configs/ship_configs.json
 test/match/
 debug-output/
 runs/
+crash.log

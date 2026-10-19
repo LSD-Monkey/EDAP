@@ -1,3 +1,11 @@
+# 10/19/2026 v1.9.4 b19
+- FIX steering: auto-tune learned absurd rates (pitch 1492 deg/s, -151073 deg/s at 180 deg) from compass
+  readings at large angles and from extrapolation. With these the keys were only tapped for 0.1 s and the ship
+  did not turn. Now: points above 100 deg or with implausible rates (Roll 1-200, Pitch 0.5-90, Yaw 0.3-60 deg/s)
+  are not learned, and implausible curve values are clamped when the hold time is calculated.
+- Crash logging: faulthandler writes the stack of all threads to crash.log on a hard crash (no Python
+  traceback in autopilot.log), Tk callback and uncaught exceptions are logged.
+
 # 10/19/2026 v1.9.4 b18
 - FIX SC Assist: 'SUPERCRUISE ASSIST ACTIVE' was found by OCR, but the region also contained other HUD text
   (body type, 'DISCOVERED ...'), so the similarity of the whole list was < 0.5 and EDAP re-activated the SCA
