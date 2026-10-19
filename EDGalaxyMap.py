@@ -160,7 +160,7 @@ class EDGalaxyMap:
             self._search_system(ap, target_name_uc)
 
             # Highlight suggestion no. result_no in the list below the search field and select it
-            ap.keys.send_primary('UI_Down', repeat=result_no, repeat_delay=0.3)
+            ap.keys.send('UI_Down', repeat=result_no, repeat_delay=0.3)
             sleep(0.3)
             ap.keys.send('UI_Select')
             # The map flies to the system and opens the SYSTEM INFORMATION panel
@@ -169,15 +169,15 @@ class EDGalaxyMap:
             # Sequence designed by the user and recorded 5x in a row with success (session 2026-10-19_08-27-25,
             # NavRoute 0.3-0.8 s after the last UI_Select):
             #   'D' (primary key of UI_Right) -> Right Arrow (UI_Right) -> 7x Down Arrow (UI_Down) -> Space.
-            #   On user request the arrow steps are sent with the primary keys too (D, D, 7x S).
             # After selecting the system the UI has no focus; the primary key 'D' brings it back, then the
             # arrow keys work. Do not add extra Right/Up presses (focus may then end up in the left column).
-            # The UI navigation here uses the PRIMARY keys of the binds (W/A/S/D) instead of the arrow keys.
-            ap.keys.send_primary('UI_Right')  # 'D': restores the UI focus
+            wake = ap.keys.get_primary_scancode('UI_Right') or SCANCODE['Key_D']
+            logger.debug(f"Galaxy Map: tap primary UI_Right key (scancode {wake}) to restore the UI focus.")
+            ap.keys.tap_scancode(wake, hold=0.12)
             sleep(0.7)
-            ap.keys.send_primary('UI_Right')  # top icon of the right column
+            ap.keys.send('UI_Right')
             sleep(0.7)
-            ap.keys.send_primary('UI_Down', repeat=7, repeat_delay=0.25)  # PLOT ROUTE
+            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.25)
             sleep(0.6)
             ap.keys.send('UI_Select')
 
@@ -219,7 +219,7 @@ class EDGalaxyMap:
     def _search_system(self, ap, target_name_uc: str):
         """ Galaxy Map must be open with the focus near the search bar (after goto_galaxy_map).
         Opens the search field, types the name and waits for the suggestion list. No ENTER (see above). """
-        ap.keys.send_primary('UI_Up')
+        ap.keys.send('UI_Up')
         sleep(0.2)
         ap.keys.send('UI_Select')  # open search field
         sleep(0.5)
@@ -278,7 +278,7 @@ class EDGalaxyMap:
             # work on 21:9 screens. GuiFocus is reliable, the map only needs a moment to accept input.
             sleep(2.0)
 
-            self.keys.send_primary('UI_Up')  # Go up to search bar (W)
+            self.keys.send('UI_Up')  # Go up to search bar
             return True
         else:
             logger.debug("Galaxy Map is already open")
