@@ -533,47 +533,15 @@ class EDNavigationPanel:
         self.hide_panel()
         return True
 
-    def scroll_to_top_of_list(self) -> bool | None:
-        """ Attempts to scroll to the top of the list by holding 'up' and waiting until the resulting OCR
-        stops changing. This should be at the top of the list.
+    def scroll_to_top_of_list(self, hold_time: float = 3.0) -> bool | None:
+        """ Scrolls to the top of the list by holding 'up' for a fixed time (like request_docking does).
+        The former version held 'up' until the OCR of the selected row did not change 3 times. With slow OCR
+        (3440x1440) that took 30 s, and when no highlighted row was found it waited forever with 'up' held.
         """
         self.keys.send("UI_Down")  # go down in case we are at the top and don't want to go to the bottom
-        self.keys.send("UI_Up", state=1)  # got to top row
-
-        ocr_textlist_last = ""
-        tries = 0
-        in_list = False  # Have we seen one item yet? Prevents quiting if we have not selected the first item.
-        while 1:
-            # Get the location panel image
-            loc_panel = self.capture_location_panel()
-            if loc_panel is None:
-                return None
-
-            # Find the selected item/menu (solid orange)
-            item = Quad.from_rect(self.sub_reg['nav_pnl_location']['rect'])
-            img_selected, q = self.ocr.get_highlighted_item_in_image(loc_panel, item)
-
-            # Check if end of list.
-            if img_selected is None and in_list:
-                #logger.debug(f"Off end of list. Did not find '{dst_name}' in list.")
-                self.keys.send("UI_Up", state=0)  # got to top row
-                return False
-
-            # OCR the selected item
-            ocr_textlist = self.ocr.image_simple_ocr(img_selected)
-            if ocr_textlist is not None:
-                # Check if list has not changed (we are at the top)
-                if ocr_textlist == ocr_textlist_last:
-                    tries = tries + 1
-                else:
-                    tries = 0
-                    ocr_textlist_last = ocr_textlist
-
-                # Require some counts in case we hit multiple 'UNIDENTIFIED SIGNAL SOURCE',
-                # 'CONFLICT ZONE' or other repetitive text
-                if tries >= 3:
-                    self.keys.send("UI_Up", state=0)  # got to top row
-                    return True
+        self.keys.send("UI_Up", hold=hold_time)  # held key is always released (also on stop)
+        sleep(0.3)
+        return True
 
     def find_destination_in_list(self, dst_name) -> bool:
         # tries is the number of rows to go through to find the item looking for
@@ -588,7 +556,16 @@ class EDNavigationPanel:
 
         y_last = -1
         in_list = False  # Have we seen one item yet? Prevents quiting if we have not selected the first item.
+        no_highlight = 0
+        start_time = time.time()
+        rows = 0
         while 1:
+            # Safety: never loop forever (no highlighted row found, very long list, ...)
+            if time.time() - start_time > 90 or rows > 60:
+                logger.warning(f"find_destination_in_list: giving up after {rows} rows / "
+                               f"{time.time() - start_time:.0f} s. Did not find '{dst_name}'.")
+                return False
+
             # Get the location panel image
             loc_panel = self.capture_location_panel()
             if loc_panel is None:
@@ -602,6 +579,14 @@ class EDNavigationPanel:
             if img_selected is None and in_list:
                 logger.debug(f"Off end of list. Did not find '{dst_name}' in list.")
                 return False
+            if img_selected is None:
+                # No highlighted row (yet). Do not wait forever.
+                no_highlight += 1
+                if no_highlight > 5:
+                    logger.debug(f"No highlighted row in the Nav Panel list. Did not find '{dst_name}'.")
+                    return False
+                sleep(0.3)
+                continue
 
             if self.ap.debug_overlay:
                 # Scale the selected item down to the scale of the tab bar
@@ -646,7 +631,12 @@ class EDNavigationPanel:
                     return True
                 else:
                     in_list = True
+                    rows += 1
                     self.keys.send("UI_Down")  # up to next item
+            else:
+                # OCR returned nothing for the highlighted row: go on to the next row instead of looping
+                rows += 1
+                self.keys.send("UI_Down")
 
 
 def dummy_cb(msg, body=None):

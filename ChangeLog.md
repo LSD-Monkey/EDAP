@@ -1,3 +1,10 @@
+# 10/19/2026 v1.9.4 b16
+- FIX: Nav Panel scroll_to_top_of_list() held UI_Up until the OCR of the selected row was stable. With slow OCR
+  this took 30 s, and if no highlighted row was found it hung forever with UI_Up held (seen when activating the
+  SC Assist to Colonia Dream). Now: UI_Down, hold UI_Up 3 s, done.
+- find_destination_in_list(): no endless loop any more (no highlighted row -> give up after 5 tries, empty OCR
+  -> next row, max. 60 rows / 90 s).
+
 # 10/19/2026 v1.9.4 b15
 - Galaxy Map: plot route with the key sequence recorded 5x with success (session 2026-10-19_08-27-25):
   K, Up, Space, type name, Down, Space (suggestion), 'D' (primary UI_Right, restores UI focus), Right Arrow,
