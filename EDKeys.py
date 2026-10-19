@@ -212,6 +212,20 @@ class EDKeys:
             logger.warning(f"get_primary_scancode({key_binding}): {e}")
         return None
 
+    def send_primary(self, key_binding: str, repeat: int = 1, repeat_delay: float | None = None,
+                     hold: float = 0.15):
+        """ Like send(), but uses the PRIMARY keyboard key of the bind (e.g. UI_Up = W instead of Up Arrow).
+        Falls back to send() if the bind has no primary keyboard key. """
+        scancode = self.get_primary_scancode(key_binding)
+        if scancode is None:
+            self.send(key_binding, repeat=repeat, repeat_delay=repeat_delay)
+            return
+        logger.debug(f"\tsend_primary={key_binding},scancode:{scancode},repeat:{repeat}")
+        for i in range(repeat):
+            self.tap_scancode(scancode, hold=hold)
+            if repeat_delay and i < repeat - 1:
+                sleep(repeat_delay)
+
     def tap_scancode(self, scancode: int, hold: float = 0.15):
         """ Press and release a raw scancode (waits for the Elite window focus like send()). """
         if not self.activate_window:
