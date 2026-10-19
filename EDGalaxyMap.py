@@ -141,7 +141,8 @@ class EDGalaxyMap:
         # Sequence recorded in game (session 2026-10-18_23-17-36, the one that plotted the route):
         #   UI_Up, UI_Select (open search field) -> type name -> wait for the suggestion list below the field
         #   -> UI_Down (highlight 1st suggestion) -> UI_Select (map flies to the system, SYSTEM INFORMATION
-        #   panel opens) -> UI_Right (icon column right of the panel) -> 7x UI_Down ('PLOT ROUTE') -> UI_Select.
+        #   panel opens) -> 'D' (primary UI_Right, restores UI focus) -> UI_Right (icon column right of the panel)
+        #   -> 7x UI_Down ('PLOT ROUTE') -> UI_Select.
         # Do NOT press ENTER in the search field: ENTER jumps to the system as well, but the UI loses the focus
         # and all following arrow keys do nothing (that was the reason the route was never plotted).
         # If the plotted route goes to a wrong system, the map is reopened and the next suggestion is used.
@@ -165,22 +166,19 @@ class EDGalaxyMap:
             # The map flies to the system and opens the SYSTEM INFORMATION panel
             sleep(max(self.SystemSelectDelay, 3.0))
 
-            # After selecting, the UI has no focus and arrow keys alone do nothing (seen in the recordings and
-            # screenshots). In the recorded successful run a press of 'S' (primary key of UI_Down) brought the
-            # UI focus back, after that the arrow keys worked. So tap the primary key of UI_Down once.
-            wake = ap.keys.get_primary_scancode('UI_Down') or SCANCODE['Key_S']
-            logger.debug(f"Galaxy Map: tap primary UI_Down key (scancode {wake}) to restore the UI focus.")
-            ap.keys.tap_scancode(wake)
-            sleep(0.5)
-
-            # Icon column right of the info panel. Extra presses do no harm (right most element / top icon), so
-            # the start position is the top icon independent of where the focus was. Then 7x down = PLOT ROUTE.
-            ap.keys.send('UI_Right', repeat=3, repeat_delay=0.3)
-            sleep(0.3)
-            ap.keys.send('UI_Up', repeat=8, repeat_delay=0.2)
-            sleep(0.3)
-            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.3)
-            sleep(0.5)
+            # Sequence designed by the user and recorded 5x in a row with success (session 2026-10-19_08-27-25,
+            # NavRoute 0.3-0.8 s after the last UI_Select):
+            #   'D' (primary key of UI_Right) -> Right Arrow (UI_Right) -> 7x Down Arrow (UI_Down) -> Space.
+            # After selecting the system the UI has no focus; the primary key 'D' brings it back, then the
+            # arrow keys work. Do not add extra Right/Up presses (focus may then end up in the left column).
+            wake = ap.keys.get_primary_scancode('UI_Right') or SCANCODE['Key_D']
+            logger.debug(f"Galaxy Map: tap primary UI_Right key (scancode {wake}) to restore the UI focus.")
+            ap.keys.tap_scancode(wake, hold=0.12)
+            sleep(0.7)
+            ap.keys.send('UI_Right')
+            sleep(0.7)
+            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.25)
+            sleep(0.6)
             ap.keys.send('UI_Select')
 
             if ap.nav_route is None:

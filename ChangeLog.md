@@ -1,3 +1,8 @@
+# 10/19/2026 v1.9.4 b15
+- Galaxy Map: plot route with the key sequence recorded 5x with success (session 2026-10-19_08-27-25):
+  K, Up, Space, type name, Down, Space (suggestion), 'D' (primary UI_Right, restores UI focus), Right Arrow,
+  7x Down Arrow, Space. Replaces the 'S' tap and the extra Right/Up presses.
+
 # 10/18/2026 v1.9.4 b14
 - Galaxy Map: route plotting rebuilt from the recorded session that worked (2026-10-18_23-17-36):
   search field -> type name -> wait for the suggestion list -> UI_Down + UI_Select (suggestion) -> UI_Right
