@@ -1567,39 +1567,33 @@ class EDAutopilot:
         approach = self.config.get('DockApproachTime', 20)
         self.ap_ckb('log', f"Approaching the station for {approach} s before requesting docking.")
         sleep(approach)
-        # At this point (of sleep()) we should be < 7.5km from the station.  Go 0 speed
-        # if we get docking granted ED's docking computer will take over
-        self.set_throttle_0(repeat=2)
-        sleep(3)  # Wait for ship to come to stop
+        # Request docking while still flying towards the station. A 'too far away' denial costs nothing, so we
+        # keep the 50% throttle and ask again every few seconds instead of stop-and-go (the old way needed up
+        # to 2.5 min after the drop with 3 denials at 7.5+ km).
         self.ap_ckb('log+vce', "Initiating Docking Procedure")
-        # Request docking through Nav panel.
         self.request_docking()
-        sleep(1)
+        sleep(1.5)
 
-        tries = self.config['DockingRetries']
-        granted = False
-        if self.jn.ship_state()['status'] == "dockinggranted":
-            granted = True
-        else:
-            for i in range(tries):
-                if self.jn.ship_state()['no_dock_reason'] == "Distance":
-                    self.ap_ckb('log', "Docking denied (too far away), flying closer.")
-                    self.set_throttle_50()
-                    sleep(10)
-                    self.set_throttle_0(repeat=2)
-                sleep(3)  # Wait for ship to come to stop
-                # Request docking through Nav panel.
-                self.request_docking()
+        tries = max(int(self.config['DockingRetries']), 8)
+        granted = self.jn.ship_state()['status'] == "dockinggranted"
+        for i in range(tries):
+            if granted:
+                break
+            reason = self.jn.ship_state()['no_dock_reason']
+            if reason == "Distance":
+                self.ap_ckb('log', "Docking denied (too far away), still approaching.")
+                self.set_throttle_50()
+                sleep(6)
+            else:
+                # Other reasons (no free pad, ...): stop and wait before asking again
                 self.set_throttle_0(repeat=2)
+                sleep(5)
+            self.request_docking()
+            sleep(1.5)
+            granted = self.jn.ship_state()['status'] == "dockinggranted"
 
-                sleep(1.5)
-                if self.jn.ship_state()['status'] == "dockinggranted":
-                    granted = True
-                    # Go back to navigation tab
-                    # self.request_docking_cleanup()
-                    break
-                if self.jn.ship_state()['status'] == "dockingdenied":
-                    pass
+        # Granted: the docking computer takes over. Not granted: do not keep flying towards the station.
+        self.set_throttle_0(repeat=2)
 
         if not granted:
             self.ap_ckb('log', 'Docking denied: '+str(self.jn.ship_state()['no_dock_reason']))
@@ -3000,6 +2994,13 @@ class EDAutopilot:
             if cur_dest and not destination_names_match(cur_dest, target):
                 self.ap_ckb('log', f"Destination changed to '{cur_dest}', terminating SC Assist.")
                 return SCAssistResult.Failed
+
+            # The HUD can only be read while Elite is the active window (another window on top would make the
+            # OCR fail and e.g. switch the 'SUPERCRUISE ASSIST ACTIVE' check off, seen when clicking into Discord).
+            if not self.keys.elite_has_focus():
+                last_ocr_time = time.time()
+                last_los_time = time.time()
+                continue
 
             # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': the SCA can not reach the target (behind a body)
             if check_los and in_sc and (time.time() - last_los_time) >= ocr_interval:

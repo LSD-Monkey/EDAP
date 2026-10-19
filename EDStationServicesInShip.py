@@ -9,6 +9,7 @@ from EDJournal import StationType
 from MarketParser import MarketParser
 from StatusParser import StatusParser
 from time import sleep
+import time
 from EDlogger import logger
 from Screen_Regions import Quad, load_calibrated_regions
 
@@ -127,6 +128,10 @@ class EDStationServicesInShip:
             return False
 
         self.ap_ckb('log+vce', "Connecting to commodities market.")
+        try:
+            market_mtime_before = self.market_parser.get_file_modified_time()
+        except Exception:
+            market_mtime_before = None
 
         # Select Mission Board
         if res == "RR":
@@ -156,8 +161,21 @@ class EDStationServicesInShip:
             self.ap.overlay.overlay_quad_pct('commodities_market', mkt, (0, 255, 0), 2, 5)
             self.ap.overlay.overlay_paint()
 
-        # Wait for screen to appear
-        res = self.ocr.wait_for_text(self.ap, [self.locale["COMMODITIES_MARKET"]], self.reg['title'], timeout=15)
+        # Wait for screen to appear. The game writes Market.json when the market is opened, that is a fast and
+        # reliable confirmation. The OCR check of the title (slow, depends on the calibration and failed on
+        # 3440x1440 every time, costing 15 s per station) is only the fallback.
+        if market_mtime_before is not None:
+            t0 = time.time()
+            while time.time() - t0 < 6.0:
+                sleep(0.25)
+                try:
+                    if self.market_parser.get_file_modified_time() != market_mtime_before:
+                        logger.debug("Commodities market confirmed by Market.json update.")
+                        sleep(1.0)  # let the screen finish building
+                        return True
+                except Exception:
+                    break
+        res = self.ocr.wait_for_text(self.ap, [self.locale["COMMODITIES_MARKET"]], self.reg['title'], timeout=10)
         return res
 
     @staticmethod

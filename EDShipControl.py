@@ -105,18 +105,21 @@ class EDShipControl:
 
     def _add_to_curve(self, axis: str, curve_key: str, angle: float, rate: float):
         """ Adds/updates a point of the current RPY curve (auto-tune).
-        - Implausible points are ignored (compass front/back ambiguity at large angles, key not reaching the game).
+        - Implausible points are ignored (compass front/back ambiguity above 90 deg, below 1 deg the reading is
+          too inaccurate, key not reaching the game).
         - An existing point is blended 50/50 with the new measurement instead of being overwritten, so one bad
           measurement can not ruin the curve and the values converge over several movements.
         - The ship config is saved automatically (at most every AUTOSAVE_INTERVAL s). """
-        if angle > 100.0 or not self._rate_ok(rate, axis):
+        if angle > 90.0 or angle < 1.0 or not self._rate_ok(rate, axis):
             logger.debug(f"Auto-tune: ignored {axis} point {angle:.1f} deg, {rate:.2f} deg/s (implausible).")
             return
         throttle = self.get_throttle_demand_dict()
         if not throttle:
             return
-        c = convert_curve_to_float(throttle[curve_key])
-        a = closest_angle(angle)
+        c = self._merge_fine_points(convert_curve_to_float(throttle[curve_key]))
+        # Below 5 deg the compass reading (+-0.3 deg) is too coarse for 0.25 deg steps: the curve got many
+        # neighbouring points with very different rates (2.0: 4.6, 2.25: 14.4 deg/s). Use 1 deg steps there.
+        a = closest_angle(angle) if angle > 5.0 else float(max(1, round(angle)))
         old = c.get(a)
         new = rate if old is None else 0.5 * old + 0.5 * rate
         c[a] = round(new, 2)
@@ -128,6 +131,22 @@ class EDShipControl:
             self.ap_ckb('log', f'Updated the {self.ap.speed_demand} {axis} curve at {a} deg: '
                                f'{round(old, 2)} -> {round(new, 2)} deg/s (measured {round(rate, 2)}).')
         self._autosave_curves()
+
+    @staticmethod
+    def _merge_fine_points(c: dict) -> dict:
+        """ Merges old auto-tune points below 5 deg that were stored in 0.25 deg steps into 1 deg steps (average),
+        keeps the 0.5 deg base point of the default curve. """
+        merged: dict[float, list[float]] = {}
+        out = {}
+        for k, v in c.items():
+            if 0.5 < k <= 5.0 and k != round(k):
+                merged.setdefault(float(max(1, round(k))), []).append(v)
+            else:
+                out[k] = v
+        for k, vals in merged.items():
+            vals = vals + ([out[k]] if k in out else [])
+            out[k] = round(sum(vals) / len(vals), 2)
+        return out
 
     def _autosave_curves(self):
         """ Saves the learned curves to configs/ship_configs.json (throttled). Before, learned values were only

@@ -1,3 +1,17 @@
+# 10/20/2026 v1.9.4 b23 (analysis of datalogger session 2026-10-19_23-28-31)
+- FIX trade: the purchase is verified via the cargo count in Status.json. EDAP logged 'Bought 752 units of
+  Rutile' although nothing was bought (no MarketBuy in the journal, cargo 0) and flew the route empty. Now: if
+  the cargo did not change, the market is left and entered again and the purchase is retried once; if it still
+  fails, Waypoint Assist stops while docked instead of flying empty.
+- Commodities market: confirmed by the Market.json update (written by the game when the market opens) instead of
+  waiting 15 s for an OCR check that never succeeded on 3440x1440. OCR is only the fallback.
+- Docking: request while still approaching at 50% throttle and ask again every ~6 s on 'too far away' (was
+  stop, fly 10 s, stop, ask: 3 denials and up to 2:20 min after the drop). Throttle 0 when granted or given up.
+- SC Assist monitor: no HUD OCR while Elite is not the active window (the 'SUPERCRUISE ASSIST ACTIVE' check was
+  switched off after Discord was in front for 43 s).
+- Auto-tune: no learning below 1 deg or above 90 deg; below 5 deg points are stored in 1 deg steps (0.25 deg
+  steps produced neighbouring points like 2.0: 4.6 / 2.25: 14.4 deg/s). Existing fine points are merged.
+
 # 10/19/2026 v1.9.4 b22
 - Auto-tune RPY reworked:
   - The result of a movement is measured after the ship has stopped turning (compass reading stable, max. 3 s).

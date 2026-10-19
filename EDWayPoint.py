@@ -268,6 +268,38 @@ class EDWayPoint:
         calc2 = 1.5 ** self.stats_log['Construction']
         sleep(max(calc1, calc2))
 
+    def _buy_verified(self, ap, name: str, qty_to_buy: int, free_cargo: int) -> int:
+        """ Buys and checks the cargo count in Status.json afterwards. Before, 'Bought 752 units' was logged even
+        when nothing was bought (no MarketBuy, cargo 0) and the ship flew the whole route empty.
+        On failure the market is left and entered again and the purchase is tried once more.
+        Returns the quantity actually bought. """
+        mkt = self.ap.stn_svcs_in_ship.commodities_market
+        for attempt in (1, 2):
+            before = int(ap.status.get_cleaned_data()['Cargo'])
+            ts = ap.status.current_data['timestamp']
+            result, qty = mkt.buy_commodity(ap.keys, name, qty_to_buy, free_cargo)
+            if qty <= 0:
+                return 0  # nothing to buy / not sold here (already logged)
+            ap.status.wait_for_file_change(ts, 6)
+            sleep(0.5)
+            after = int(ap.status.get_cleaned_data()['Cargo'])
+            bought = after - before
+            if bought > 0:
+                if bought < qty:
+                    self.ap_ckb('log', f"Bought only {bought} of {qty} units of {name}.")
+                return bought
+            self.ap_ckb('log+vce', f"Purchase of {name} not confirmed, cargo unchanged ({after} t).")
+            if attempt == 1:
+                self.ap_ckb('log', "Leaving and re-entering the market, trying again.")
+                ap.keys.send('UI_Back', repeat=4)
+                sleep(2)
+                self.ap.stn_svcs_in_ship.goto_commodities_market()
+                sleep(1)
+                mkt.select_buy(ap.keys)
+        self._trade_failed = True
+        self.ap_ckb('log+vce', f"Unable to buy {name}.")
+        return 0
+
     def execute_trade(self, ap, dest_key):
         # Get trade commodities from waypoint
         sell_commodities = self.waypoints[dest_key]['SellCommodities']
@@ -275,6 +307,7 @@ class EDWayPoint:
         fleetcarrier_transfer = self.waypoints[dest_key]['FleetCarrierTransfer']
         global_buy_commodities = self.waypoints['GlobalShoppingList']['BuyCommodities']
 
+        self._trade_failed = False
         if len(sell_commodities) == 0 and len(buy_commodities) == 0 and len(global_buy_commodities) == 0:
             return
 
@@ -465,7 +498,7 @@ class EDWayPoint:
                                 logger.info(f"Execute trade: Shopping list requests {qty_to_buy} units of {key}")
 
                                 # Attempt to buy the commodity
-                                result, qty = self.ap.stn_svcs_in_ship.commodities_market.buy_commodity(ap.keys, name, qty_to_buy, free_cargo)
+                                qty = self._buy_verified(ap, name, qty_to_buy, free_cargo)
                                 logger.info(f"Execute trade: Bought {qty} units of {name}")
 
                                 # If we bought any goods, wait for status file to update with
@@ -489,7 +522,7 @@ class EDWayPoint:
                         logger.info(f"Execute trade: Shopping list requests {qty_to_buy} units of {key}")
 
                         # Attempt to buy the commodity
-                        result, qty = self.ap.stn_svcs_in_ship.commodities_market.buy_commodity(ap.keys, key, qty_to_buy, free_cargo)
+                        qty = self._buy_verified(ap, key, qty_to_buy, free_cargo)
                         logger.info(f"Execute trade: Bought {qty} units of {key}")
 
                         # If we bought any goods, wait for status file to update with
@@ -517,7 +550,7 @@ class EDWayPoint:
                     logger.info(f"Execute trade: Global shopping list requests {qty_to_buy} units of {key}")
 
                     # Attempt to buy the commodity
-                    result, qty = self.ap.stn_svcs_in_ship.commodities_market.buy_commodity(ap.keys, key, qty_to_buy, free_cargo)
+                    qty = self._buy_verified(ap, key, qty_to_buy, free_cargo)
                     logger.info(f"Execute trade: Bought {qty} units of {key}")
 
                     # If we bought any goods, wait for status file to update with
@@ -757,6 +790,12 @@ class EDWayPoint:
                 self.ap_ckb('log+vce', f"Execute trade at Station: {next_wp_station}")
                 self.execute_trade(self.ap, dest_key)
                 self._replot_after_trade = True  # cargo mass changed -> jump range changed
+                if getattr(self, '_trade_failed', False):
+                    # Do not fly the whole route with an empty hold
+                    self.ap_ckb('log+vce', "Trade failed (purchase not confirmed). Stopping Waypoint Assist here, "
+                                           "still docked. Please check the market.")
+                    _abort = True
+                    break
 
             # Mark this waypoint as completed
             self.mark_waypoint_complete(dest_key)
