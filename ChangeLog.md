@@ -1,3 +1,18 @@
+# 10/20/2026 v1.9.4 b24 (video analysis of session 2026-10-19_23-28-31)
+- FIX trade (root cause of the failed Rutile purchase): after selling, the SELL COMMODITY dialog stays open
+  (0/0, CANCEL selected). The 'select BUY' keys went into the dialog, EDAP stayed in the SELL list and 'bought'
+  nothing. The sell and buy dialogs are now closed with UI_Back after the transaction.
+- FIX trade: the highlighted commodity is checked by OCR of the info panel ('selected_name' region) and corrected
+  with up/down if it differs (one of 37 'down' presses got lost: LITHIUM instead of SILVER). Down presses are
+  slower (0.08 s hold, 0.12 s gap). If the name is not readable, the counted position is used as before.
+- FIX alignment: if compass and target reticle disagree by > 10 deg, the compass is used. The reticle is the
+  *selected target* (here the planet Kakmbutan 6), not necessarily the destination; EDAP aligned to the planet and
+  the in-game SCA waited with 'ALIGN WITH TARGET DESTINATION' until the user aligned by hand.
+- SC Assist: 'ALIGN WITH TARGET DESTINATION' (read by the existing OCR check) triggers a compass align.
+- Departure from stations without boosting (boost inside the no-fire zone gave a SPEEDING warning at 7.3 km and
+  'Boost failed: insufficient energy').
+- Docking approach at 100% throttle (drop at ~11.5 km, docking possible < 7.5 km), 50% before requesting docking.
+
 # 10/20/2026 v1.9.4 b23 (analysis of datalogger session 2026-10-19_23-28-31)
 - FIX trade: the purchase is verified via the cargo count in Status.json. EDAP logged 'Bought 752 units of
   Rutile' although nothing was bought (no MarketBuy in the journal, cargo 0) and flew the route empty. Now: if

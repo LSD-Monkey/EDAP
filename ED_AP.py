@@ -1318,8 +1318,15 @@ class EDAutopilot:
             if pit_err > 2.0 or yaw_err > 2.0:
                 self.ap_ckb('log', f'Compass-Target error p: {round(pit_err, 2)}deg y: {round(yaw_err, 2)}deg')
 
-            # Prefer target (will be more accurate). Maybe add some additional logic to this later.
-            use_target = True
+            # Prefer target (will be more accurate) - but only if it is the same object. The target reticle is
+            # the currently *selected target*, which can be another object than the destination: in the video of
+            # 2026-10-19 the planet 'Kakmbutan 6' was targeted, the destination 'Macgregor Orbital' was 31 deg
+            # to the right. EDAP aligned to the planet, the in-game SCA showed 'ALIGN WITH TARGET DESTINATION'
+            # and did not fly. The compass always points to the destination, so use it if both disagree.
+            use_target = not (pit_err > 10.0 or yaw_err > 10.0)
+            if not use_target:
+                logger.info(f"Compass and target reticle disagree (p {pit_err:.1f}, y {yaw_err:.1f} deg): "
+                            f"target is not the destination, using the compass.")
             if use_target:
                 occ: bool = tar_off1['occ']
                 behind = nav_off1['z'] < 0
@@ -1327,8 +1334,9 @@ class EDAutopilot:
                           'tar_occ': occ, 'tar_behind': behind, 'used_nav': False, 'used_tar': True}
                 return result
             else:
+                behind = nav_off1['z'] < 0
                 result = {'roll': nav_off1['roll'], 'pit': nav_off1['pit'], 'yaw': nav_off1['yaw'],
-                          'tar_occ': False, 'tar_behind': False, 'used_nav': True, 'used_tar': False}
+                          'tar_occ': False, 'tar_behind': behind, 'used_nav': True, 'used_tar': False}
                 return result
 
         else:
@@ -1556,17 +1564,21 @@ class EDAutopilot:
             logger.error('In dock(), after wait, but still not in_space')
 
         sleep(5)  # wait 5 seconds to get to 7.5km to request docking
-        self.set_throttle_50()
+        # Full throttle for the approach: the drop is at ~11.5 km and docking is only possible below 7.5 km. With
+        # 50% a Type-9 needed 2:20 min (video 2026-10-19). The no-fire zone (speed limit 100 m/s) starts at
+        # ~7.5-8 km, so we go back to 50% before requesting docking.
+        self.set_throttle_100()
 
         if self.jn.ship_state()['status'] != "in_space":
             self.set_throttle_0()
             logger.error('In dock(), after long wait, but still not in_space')
             raise Exception('Docking failed (not in space)')
 
-        # Fly towards the station (50% throttle) until we are < 7.5 km. Configurable, slow/heavy ships need longer.
+        # Fly towards the station (100% throttle, see above). Configurable, slow/heavy ships need longer.
         approach = self.config.get('DockApproachTime', 20)
         self.ap_ckb('log', f"Approaching the station for {approach} s before requesting docking.")
         sleep(approach)
+        self.set_throttle_50()  # below the no-fire zone speed limit before we get there
         # Request docking while still flying towards the station. A 'too far away' denial costs nothing, so we
         # keep the 50% throttle and ask again every few seconds instead of stop-and-go (the old way needed up
         # to 2.5 min after the drop with 3 denials at 7.5+ km).
@@ -2429,8 +2441,10 @@ class EDAutopilot:
                     # In space (launched from starport or outpost etc.) OR construction site
                     self.update_ap_status("Undock Complete, accelerating")
 
-                    # Engage Supercruise
-                    self.sc_engage(True)
+                    # Engage Supercruise WITHOUT boosting: we are still in the station's no-fire zone (~7.5 km),
+                    # boosting there gives 'SPEEDING' warnings/fines (seen in the video at 7.3 km) and with an
+                    # empty capacitor it only fails ('Boost failed: insufficient energy').
+                    self.sc_engage(False)
 
         elif on_planet:
             # Check if we are on a landing pad (docked), or landed on the planet surface
@@ -3027,6 +3041,19 @@ class EDAutopilot:
                     if not ocr_confirmed:
                         ocr_confirmed = True
                         self.ap_ckb('log', "Supercruise Assist active.")
+                elif 'ALIGNWITHTARGET' in getattr(self, '_sca_last_ocr', ''):
+                    # The SCA is engaged but waits for the pilot to point the ship to the destination
+                    # ('ALIGN WITH TARGET DESTINATION'). Without this EDAP just waited (video 2026-10-19,
+                    # distance stayed at 72.4 Ls for minutes until aligned by hand).
+                    self.ap_ckb('log+vce', "Supercruise Assist waits for alignment, aligning to the destination.")
+                    try:
+                        self.compass_align(scr_reg)
+                    except EDAP_Interrupt:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"sc_assist: compass align failed: {e}")
+                    ocr_not_active_cnt = 0
+                    last_ocr_time = time.time()
                 else:
                     ocr_not_active_cnt += 1
                     if ocr_not_active_cnt >= ocr_not_active_limit:
@@ -3101,8 +3128,10 @@ class EDAutopilot:
         # The region also contains other HUD text (body type, 'DISCOVERED ...'), so the similarity of the whole
         # list drops below the limit although the text is there. Check for the text itself (spaces removed).
         found_text = False
+        self._sca_last_ocr = ""
         if ocr_textlist is not None:
             joined = "".join(str(t) for t in ocr_textlist).upper().replace(" ", "")
+            self._sca_last_ocr = joined
             found_text = msg.upper().replace(" ", "") in joined
         logger.debug(f"SC Assist active similarity with {str(ocr_textlist)} is {sim}, text found: {found_text}")
 

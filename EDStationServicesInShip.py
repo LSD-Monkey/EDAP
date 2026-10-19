@@ -10,6 +10,8 @@ from MarketParser import MarketParser
 from StatusParser import StatusParser
 from time import sleep
 import time
+import re
+import difflib
 from EDlogger import logger
 from Screen_Regions import Quad, load_calibrated_regions
 
@@ -236,9 +238,76 @@ class CommoditiesMarket:
         # The reg rect is top left x, y, and bottom right x, y in fraction of screen resolution at 1920x1080
         self.reg = {'cargo_col': {'rect': [0.13, 0.227, 0.19, 0.90]},
                     'commodity_name_col': {'rect': [0.19, 0.227, 0.41, 0.90]},
-                    'supply_demand_col': {'rect': [0.42, 0.227, 0.49, 0.90]}}
+                    'supply_demand_col': {'rect': [0.42, 0.227, 0.49, 0.90]},
+                    # Large name of the highlighted commodity in the info panel right of the list
+                    'selected_name': {'rect': [0.70, 0.183, 0.99, 0.228]}}
         self.commodity_row_width = 422  # Buy/sell item width in pixels at 1920x1080
         self.commodity_row_height = 35  # Buy/sell item height in pixels at 1920x1080
+
+    @staticmethod
+    def _norm(txt: str) -> str:
+        return re.sub(r'[^A-Z0-9]', '', (txt or '').upper())
+
+    def _selected_commodity_name(self) -> str | None:
+        """ OCR of the name of the highlighted commodity (info panel right of the list). """
+        try:
+            img = self.screen.get_screen_rect_pct(self.reg['selected_name']['rect'])
+            if img is None:
+                return None
+            txt = self.ocr.image_simple_ocr(img, 'commodity_selected')
+        except Exception as e:
+            logger.debug(f"_selected_commodity_name: {e}")
+            return None
+        if not txt:
+            return None
+        return " ".join(str(t) for t in txt)
+
+    def _match_item(self, ocr_name: str, items: list) -> int | None:
+        """ Index of the list item that best matches the OCR text, or None. """
+        n = self._norm(ocr_name)
+        if not n:
+            return None
+        best, best_i = 0.0, None
+        for i, it in enumerate(items):
+            m = self._norm(it['Name_Localised'])
+            r = 1.0 if m == n else difflib.SequenceMatcher(None, m, n).ratio()
+            if r > best:
+                best, best_i = r, i
+        return best_i if best >= 0.8 else None
+
+    def _goto_list_item(self, keys, items: list, index: int, name: str) -> bool:
+        """ Moves the list highlight to items[index] and checks it with OCR of the info panel.
+        Counting key presses alone is not reliable: at Orbital Sanctum one of 37 'down' presses got lost and
+        EDAP opened the buy dialog of LITHIUM instead of SILVER (video 2026-10-19). If the OCR shows another item
+        of the list, the difference is corrected with up/down. If the name can not be read at all, the counted
+        position is used as before. Returns False only if the right item could not be reached. """
+        keys.send('UI_Up', hold=5.0)  # go up to top of list
+        sleep(1.0)
+        if index > 0:
+            keys.send('UI_Down', hold=0.08, repeat=index, repeat_delay=0.12)
+        for attempt in range(4):
+            sleep(0.7)
+            cur = self._selected_commodity_name()
+            if cur is None:
+                logger.debug(f"Market list: selected commodity not readable, using counted position for '{name}'.")
+                return True
+            cur_i = self._match_item(cur, items)
+            if cur_i is None:
+                if self._norm(name) in self._norm(cur):
+                    return True
+                logger.debug(f"Market list: OCR '{cur}' does not match a list item, using counted position.")
+                return True
+            if cur_i == index:
+                logger.debug(f"Market list: '{name}' selected (OCR '{cur}').")
+                return True
+            delta = index - cur_i
+            logger.info(f"Market list: '{items[cur_i]['Name_Localised']}' selected instead of '{name}', "
+                        f"correcting by {delta:+d}.")
+            if delta > 0:
+                keys.send('UI_Down', hold=0.08, repeat=delta, repeat_delay=0.15)
+            else:
+                keys.send('UI_Up', hold=0.08, repeat=-delta, repeat_delay=0.15)
+        return False
 
     def select_buy(self, keys) -> bool:
         """ Select Buy. Assumes on Commodities Market screen. """
@@ -307,9 +376,9 @@ class CommoditiesMarket:
                     self.market_parser.current_data['Items'][i]['StockBracket'] = 0
 
         if index > -1:
-            keys.send('UI_Up', hold=5.0)  # go up to top of list
-            sleep(1.0)
-            keys.send('UI_Down', hold=0.05, repeat=index)  # go down # of times user specified
+            if not self._goto_list_item(keys, buyable_items, index, name):
+                self.ap_ckb('log+vce', f"Could not select {name} in the market list, not buying.")
+                return False, 0
 
             # # Get the goods panel image
             # goods_panel = self.capture_goods_panel()
@@ -363,8 +432,11 @@ class CommoditiesMarket:
                 keys.send("UI_Right", hold=0.04, repeat=act_qty)
             keys.send('UI_Down')
             keys.send('UI_Select')  # Select Buy
+            sleep(1.5)  # transaction
+            # Like the sell dialog, the BUY COMMODITY dialog stays open after the purchase: close it, otherwise the
+            # next commodity of the shopping list would be selected inside the dialog.
+            keys.send('UI_Back')  # Close the dialog, back to the commodities list
             sleep(0.5)
-            # keys.send('UI_Back')  # Back to commodities list
 
         return True, act_qty
 
@@ -414,9 +486,9 @@ class CommoditiesMarket:
         act_qty = min(qty, qty_in_cargo)
 
         if index > -1:
-            keys.send('UI_Up', hold=5.0)  # go up to top of list
-            sleep(1.0)
-            keys.send('UI_Down', hold=0.05, repeat=index)  # go down # of times user specified
+            if not self._goto_list_item(keys, sellable_items, index, name):
+                self.ap_ckb('log+vce', f"Could not select {name} in the market list, not selling.")
+                return False, 0
 
             sleep(0.75)
             keys.send('UI_Select')  # Select that commodity
@@ -442,8 +514,12 @@ class CommoditiesMarket:
 
             keys.send('UI_Down')  # Down to the Sell button (already assume sell all)
             keys.send('UI_Select')  # Select to Sell all
+            sleep(1.5)  # transaction
+            # The SELL COMMODITY dialog stays open after the sale (0/0, CANCEL selected, seen in the video of
+            # session 2026-10-19_23-28-31). Without closing it the following 'select BUY' keys went into the
+            # dialog, EDAP stayed in the SELL list and the purchase never happened.
+            keys.send('UI_Back')  # Close the dialog, back to the commodities list
             sleep(0.5)
-            # keys.send('UI_Back')  # Back to commodities list
 
         return True, act_qty
 
