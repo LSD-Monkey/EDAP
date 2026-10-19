@@ -1,3 +1,13 @@
+# 10/19/2026 v1.9.4 b20
+- FIX crashes: callbacks from worker threads (engine, SCO monitoring, key sender/focus pause, hotkeys) changed
+  Tk widgets directly. Tkinter is not thread safe; with several threads logging at the same time (typically
+  around the focus pause) the process ended without any traceback. Callbacks from other threads are now queued
+  and processed in the Tk main thread (EDAPGui.callback / _process_cb_queue).
+- Docking: approach time before requesting docking is configurable ('DockApproachTime', default 20 s, was 12 s).
+  On 'too far' denial EDAP flies 10 s (was 5 s) closer before asking again.
+- Waypoint Assist: if started while docked at the station of a waypoint, the route continues from that waypoint
+  (its trade is done first) instead of undocking and flying to the first open waypoint.
+
 # 10/19/2026 v1.9.4 b19
 - FIX steering: auto-tune learned absurd rates (pitch 1492 deg/s, -151073 deg/s at 180 deg) from compass
   readings at large angles and from extrapolation. With these the keys were only tapped for 0.1 s and the ship

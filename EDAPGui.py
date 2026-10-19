@@ -8,6 +8,8 @@
 # import cv2
 # import json
 # from pathlib import Path
+import queue
+import threading
 import subprocess
 from typing import TypedDict
 
@@ -154,6 +156,12 @@ class APGui:
 
         self.gui_loaded = False
         self.log_buffer = queue.Queue()
+        # Callbacks from worker threads (engine, SCO monitor, key sender, ...) must not touch Tk widgets:
+        # Tkinter is not thread safe, concurrent widget calls from several threads end the process without a
+        # Python traceback. They are queued here and processed in the Tk main thread (see _process_cb_queue).
+        self._cb_queue = queue.Queue()
+        self._main_thread = threading.main_thread()
+        self.root.after(100, self._process_cb_queue)
         self.callback('log', f'Starting ED Autopilot {EDAP_VERSION}.')
 
         self.ed_ap = EDAutopilot(cb=self.callback)
@@ -283,7 +291,7 @@ class APGui:
 
         if self.ed_ap.config['HotkeysEnable']:
             # Add the desired hotkeys
-            keyboard.add_hotkey(self.ed_ap.config['HotKey_StopAllAssists'], self.stop_all_assists)
+            keyboard.add_hotkey(self.ed_ap.config['HotKey_StopAllAssists'], self.callback, args=('stop_all_assists', None))
             keyboard.add_hotkey(self.ed_ap.config['HotKey_StartFSD'], self.callback, args=('fsd_start', None))
             keyboard.add_hotkey(self.ed_ap.config['HotKey_StartSC'], self.callback, args=('sc_start', None))
             keyboard.add_hotkey(self.ed_ap.config['HotKey_StartRobigo'], self.callback, args=('robigo_start', None))
@@ -296,6 +304,28 @@ class APGui:
 
     # callback from the EDAP, to configure GUI items
     def callback(self, msg, body=None):
+        """ Thread safe entry point for messages from the autopilot. """
+        if threading.current_thread() is self._main_thread:
+            self._callback_main(msg, body)
+        else:
+            self._cb_queue.put((msg, body))
+
+    def _process_cb_queue(self):
+        """ Runs in the Tk main thread: handles all queued callbacks. """
+        try:
+            for _ in range(200):  # at most 200 per tick, keep the GUI responsive
+                try:
+                    msg, body = self._cb_queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self._callback_main(msg, body)
+                except Exception as e:
+                    logger.error(f"GUI callback '{msg}' failed: {e}")
+        finally:
+            self.root.after(100, self._process_cb_queue)
+
+    def _callback_main(self, msg, body=None):
         if msg == 'log':
             self.log_msg(body)
         elif msg == 'log+vce':

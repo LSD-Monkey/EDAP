@@ -394,6 +394,7 @@ class EDAutopilot:
             "SCAssistAlign": True,  # In-game SC Assist: compass align (throttle 0) after activating the SCA
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
             "SCAssistNoLOSEscapeTime": 20,  # In-game SC Assist: seconds to fly 'up' when the target is behind a body
+            "DockApproachTime": 20,  # seconds at 50% throttle towards the station before requesting docking (was 12)
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
         # a default value or an error will occur reading the new value!
@@ -478,6 +479,8 @@ class EDAutopilot:
                 cnf['SCAssistCheckActiveOCR'] = True
             if 'SCAssistNoLOSEscapeTime' not in cnf:
                 cnf['SCAssistNoLOSEscapeTime'] = 20
+            if 'DockApproachTime' not in cnf:
+                cnf['DockApproachTime'] = 20
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -1560,7 +1563,10 @@ class EDAutopilot:
             logger.error('In dock(), after long wait, but still not in_space')
             raise Exception('Docking failed (not in space)')
 
-        sleep(12)
+        # Fly towards the station (50% throttle) until we are < 7.5 km. Configurable, slow/heavy ships need longer.
+        approach = self.config.get('DockApproachTime', 20)
+        self.ap_ckb('log', f"Approaching the station for {approach} s before requesting docking.")
+        sleep(approach)
         # At this point (of sleep()) we should be < 7.5km from the station.  Go 0 speed
         # if we get docking granted ED's docking computer will take over
         self.set_throttle_0(repeat=2)
@@ -1577,8 +1583,9 @@ class EDAutopilot:
         else:
             for i in range(tries):
                 if self.jn.ship_state()['no_dock_reason'] == "Distance":
+                    self.ap_ckb('log', "Docking denied (too far away), flying closer.")
                     self.set_throttle_50()
-                    sleep(5)
+                    sleep(10)
                     self.set_throttle_0(repeat=2)
                 sleep(3)  # Wait for ship to come to stop
                 # Request docking through Nav panel.

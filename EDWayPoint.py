@@ -200,6 +200,56 @@ class EDWayPoint:
 
         return dest_key, self.waypoints[dest_key]
 
+    def _start_at_docked_station(self):
+        """ When Waypoint Assist is started while docked at the station of a waypoint, that waypoint becomes the
+        current one: all waypoints before it are marked completed, it and all after it are marked open. The normal
+        loop then sees 'Already at target Station' and executes the trade of this waypoint. """
+        try:
+            if not self.ap.status.get_flag(FlagsDocked):
+                return
+            cur_system = self.ap.jn.ship_state()['cur_star_system'].upper()
+            cur_station = self.ap.jn.ship_state()['cur_station'].upper()
+        except Exception as e:
+            logger.warning(f"_start_at_docked_station: {e}")
+            return
+        if not cur_station:
+            return
+
+        keys = list(self.waypoints.keys())
+        match_idx = None
+        for i, key in enumerate(keys):
+            wp = self.waypoints[key]
+            if key == "GlobalShoppingList" or wp.get('Skip', False):
+                continue
+            wp_system = wp.get('SystemName', '').upper()
+            wp_station = wp.get('StationName', '').upper()
+            if wp_system == "REPEAT" or not wp_station:
+                continue
+            # Fleet/Squadron carriers: the journal only reports the ID (ABC-123) at the end of the name
+            same_station = (wp_station == cur_station or wp_station.endswith(cur_station))
+            same_system = (wp_system == "" or wp_system == cur_system)
+            if same_station and same_system:
+                match_idx = i
+                break
+
+        if match_idx is None:
+            self.ap_ckb('log', f"Docked at {cur_station}, which is not a station of this waypoint file.")
+            return
+
+        changed = False
+        for i, key in enumerate(keys):
+            if key == "GlobalShoppingList" or 'Completed' not in self.waypoints[key]:
+                continue
+            should_be_completed = i < match_idx
+            if self.waypoints[key]['Completed'] != should_be_completed:
+                self.waypoints[key]['Completed'] = should_be_completed
+                changed = True
+        if changed:
+            self.write_waypoints(data=None, filename='./waypoints/' + Path(self.filename).name)
+
+        self.ap_ckb('log+vce', f"Already docked at waypoint station {cur_station}. "
+                               f"Continuing the route from here.")
+
     def mark_all_waypoints_not_complete(self):
         for j, tkey in enumerate(self.waypoints):
             # Ensure 'Completed' key exists before trying to set it
@@ -497,6 +547,10 @@ class EDWayPoint:
         self.step = 0  # start at first waypoint
         self.ap_ckb('log', "Waypoint file: " + str(Path(self.filename).name))
         self.reset_stats()
+
+        # Already docked at one of the waypoint stations? Then continue from there (do its trade first)
+        # instead of undocking and flying to the first open waypoint.
+        self._start_at_docked_station()
 
         # Loop until complete, or error
         _abort = False
