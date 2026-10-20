@@ -1,3 +1,15 @@
+# 10/20/2026 v1.9.4 b25
+- Waypoint Assist restarts itself after an error instead of stopping (log 2026-10-20 08:32: 'mnvr_to_target
+  failed 5 times'). 10 s pause, throttle 0, then it continues from the current position. Max.
+  'WaypointAutoRestarts' (default 3) restarts in a row (counter is reset after 20 min). A stop by the user is
+  never restarted.
+- FIX compass align: reported 'failed - exhausted all retries' although the last correction had aligned the ship
+  (yaw -0.37, pitch 0.35). The position is now checked after every try.
+- Compass align: if the compass is not detected, every 2nd try pitches up 45 deg instead of only rolling (a big
+  star in front - 'sun avoid failsafe timeout' - hid the compass for 3 minutes). The 'unable to detect compass'
+  loops read the compass again instead of logging 20x without doing anything.
+- Target align: if the target reticle is not found but the compass says aligned, EDAP jumps instead of failing.
+
 # 10/20/2026 v1.9.4 b24 (video analysis of session 2026-10-19_23-28-31)
 - FIX trade (root cause of the failed Rutile purchase): after selling, the SELL COMMODITY dialog stays open
   (0/0, CANCEL selected). The 'select BUY' keys went into the dialog, EDAP stayed in the SELL list and 'bought'

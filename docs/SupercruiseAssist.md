@@ -42,6 +42,7 @@ If the ship has **no SCA module**, or the destination cannot be found in the Nav
 |---|---|---|
 | `SCAssistTimeout` | `3600` | Max. seconds to reach the destination (0 = no limit). |
 | `DockApproachTime` | `20` | After the drop at a station: seconds at 50 % throttle towards the station before docking is requested (was fixed 12 s). If docking is denied for distance, EDAP flies 10 s closer and asks again. |
+| `WaypointAutoRestarts` | `3` | Waypoint Assist restarts itself after an error (10 s pause), at most this often in a row. 0 = stop as before. |
 | `SCAssistAlign` | `true` | Align to the destination with the compass (throttle 0) after activating the SCA. |
 | `SCAssistCheckActiveOCR` | `true` | Check the HUD for *SUPERCRUISE ASSIST ACTIVE* (English locale only, `SC_ASSIST_ACTIVE_MSG`). |
 | `SCAssistNoLOSEscapeTime` | `20` | If *MOVE TO OBTAIN LINE OF SIGHT TO TARGET* is shown (target behind a planet/star, OCR region `sca_no_los`, English locale `SC_ASSIST_NO_LOS_MSG`): throttle 0, pitch up 90°, fly this many seconds, throttle 0, then re-activate the SCA (which aligns to the target again). |

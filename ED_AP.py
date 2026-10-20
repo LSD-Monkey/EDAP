@@ -395,6 +395,7 @@ class EDAutopilot:
             "SCAssistCheckActiveOCR": True,  # In-game SC Assist: check for 'SUPERCRUISE ASSIST ACTIVE' via OCR
             "SCAssistNoLOSEscapeTime": 20,  # In-game SC Assist: seconds to fly 'up' when the target is behind a body
             "DockApproachTime": 20,  # seconds at 50% throttle towards the station before requesting docking (was 12)
+            "WaypointAutoRestarts": 3,  # Waypoint Assist restarts itself after an error, max. this often in a row
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
         # a default value or an error will occur reading the new value!
@@ -481,6 +482,8 @@ class EDAutopilot:
                 cnf['SCAssistNoLOSEscapeTime'] = 20
             if 'DockApproachTime' not in cnf:
                 cnf['DockApproachTime'] = 20
+            if 'WaypointAutoRestarts' not in cnf:
+                cnf['WaypointAutoRestarts'] = 3
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -1700,9 +1703,16 @@ class EDAutopilot:
         for ii in range(self.config['NavAlignTries']):
             off = self.get_compass_target_offset()
             if off is None:
-                self.ap_ckb('log', 'Unable to detect compass. Rolling to new position.')
-                # Try rolling if star glare is obscuring the compass
-                self.ship_control.roll_clockwise_anticlockwise(90)
+                if ii % 2 == 0:
+                    self.ap_ckb('log', 'Unable to detect compass. Rolling to new position.')
+                    # Try rolling if star glare is obscuring the compass
+                    self.ship_control.roll_clockwise_anticlockwise(90)
+                else:
+                    # Rolling alone does not help when a big star is in front of us ('sun avoid failsafe
+                    # timeout' before, compass not visible for 3 min in log 2026-10-20). Pitch up to get the star
+                    # out of view.
+                    self.ap_ckb('log', 'Unable to detect compass. Pitching up to get away from the star glare.')
+                    self.ship_control.pitch_up_down(45)
                 continue
 
             logger.debug(f"Compass position: yaw: {str(off['yaw'])} pit: {str(off['pit'])}")
@@ -1731,6 +1741,10 @@ class EDAutopilot:
                     # Calc roll time based on nav point location
                     if off is None:
                         self.ap_ckb('log', 'Unable to detect compass.')
+                        sleep(0.3)
+                        off = self.get_compass_target_offset()  # read again instead of looping 20x for nothing
+                        if off is None:
+                            break
                         continue
                     if abs(off['roll']) > close and (180 - abs(off['roll']) > close):
                         # Clear the overlays before moving
@@ -1753,6 +1767,10 @@ class EDAutopilot:
                 # Calc pitch time based on nav point location
                 if off is None:
                     self.ap_ckb('log', 'Unable to detect compass.')
+                    sleep(0.3)
+                    off = self.get_compass_target_offset()
+                    if off is None:
+                        break
                     continue
                 if abs(off['pit']) > close:
                     # Clear the overlays before moving
@@ -1772,6 +1790,10 @@ class EDAutopilot:
                 # Calc yaw time based on nav point location
                 if off is None:
                     self.ap_ckb('log', 'Unable to detect compass.')
+                    sleep(0.3)
+                    off = self.get_compass_target_offset()
+                    if off is None:
+                        break
                     continue
                 if abs(off['yaw']) > close:
                     # Clear the overlays before moving
@@ -1790,6 +1812,11 @@ class EDAutopilot:
             sleep(.1)
             if off is not None:
                 logger.debug(f"Compass position: yaw: {str(off['yaw'])} pit: {str(off['pit'])}")
+                # The last correction of the last try may already have aligned us (log 2026-10-20:
+                # 'yaw -0.37 pit 0.35' followed by 'Compass Align failed').
+                if abs(off['yaw']) < 3.0 and abs(off['pit']) < 3.0:
+                    self.ap_ckb('log', 'Compass Align complete')
+                    return True
 
         # Not aligned
         self.ap_ckb('log+vce', 'Compass Align failed - exhausted all retries')
@@ -1837,7 +1864,14 @@ class EDAutopilot:
             align_res = self.sc_target_align(scr_reg)
             if align_res == ScTargetAlignReturn.Lost:
                 self.set_throttle_50()
-                self.compass_align(scr_reg)  # Compass Align
+                compass_ok = self.compass_align(scr_reg)  # Compass Align
+                if compass_ok and i >= 1:
+                    # The target reticle is not visible (e.g. hidden by the glare of the star), but the compass
+                    # says we are aligned. Jump instead of failing (log 2026-10-20: 5 x 'target not found'
+                    # although aligned -> Waypoint Assist stopped).
+                    self.ap_ckb('log', 'Target reticle not found, but aligned by compass. Jumping.')
+                    self.set_throttle_100()
+                    return
 
             elif align_res == ScTargetAlignReturn.Found:
                 self.set_throttle_100()
@@ -3514,16 +3548,45 @@ class EDAutopilot:
             self.refuel_cnt = 0
             self.total_dist_jumped = 0
             self.total_jumps = 0
-            try:
-                self.waypoint_assist(self.keys, self.scrReg)
-            except EDAP_Interrupt:
-                logger.debug("Caught stop exception")
-                self._release_keys_safe()
-            except Exception as e:
-                print("Trapped generic:"+str(e))
-                logger.debug("Waypoint Assist trapped generic:"+str(e))
-                self.ap_ckb('log', "Waypoint Assist stopped with error: "+str(e))
-                traceback.print_exc()
+            # Waypoint Assist restarts itself after an error (e.g. 'mnvr_to_target failed 5 times') instead of
+            # stopping. A stop by the user (EDAP_Interrupt) is never restarted.
+            max_restarts = int(self.config.get('WaypointAutoRestarts', 3))
+            restarts = 0
+            last_restart = 0.0
+            while True:
+                try:
+                    self.waypoint_assist(self.keys, self.scrReg)
+                    break
+                except EDAP_Interrupt:
+                    logger.debug("Caught stop exception")
+                    self._release_keys_safe()
+                    break
+                except Exception as e:
+                    print("Trapped generic:"+str(e))
+                    logger.debug("Waypoint Assist trapped generic:"+str(e))
+                    self.ap_ckb('log', "Waypoint Assist stopped with error: "+str(e))
+                    traceback.print_exc()
+                    if time.time() - last_restart > 1200:
+                        restarts = 0  # the last restart was > 20 min ago, count again
+                    if restarts >= max_restarts:
+                        self.ap_ckb('log+vce', f"Waypoint Assist failed {restarts + 1} times in a row, giving up.")
+                        break
+                    restarts += 1
+                    last_restart = time.time()
+                    try:
+                        self._release_keys_safe()
+                        self.stop_sco_monitoring()
+                        self.set_throttle_0()
+                        self.ap_ckb('log+vce', f"Restarting Waypoint Assist in 10 seconds "
+                                               f"({restarts} of {max_restarts}).")
+                        sleep(10)
+                    except EDAP_Interrupt:
+                        logger.debug("Caught stop exception while waiting for the restart")
+                        self._release_keys_safe()
+                        break
+                    except Exception as e2:
+                        logger.warning(f"Waypoint Assist restart preparation failed: {e2}")
+                    self.update_ap_status("Waypoint Assist restart")
 
             self.stop_sco_monitoring()
             self.waypoint_assist_enabled = False
