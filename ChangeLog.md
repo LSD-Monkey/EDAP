@@ -1,3 +1,14 @@
+# 10/20/2026 v1.9.4 b29 (video analysis of session 2026-10-20_16-57-51)
+- FIX trade: after a sale/purchase the game now closes the BUY/SELL dialog itself. The UI_Back added in b24 then
+  left the commodities market, the following 'select BUY' keys opened the MISSION BOARD in the station menu and
+  the 37 'down' presses went there (17:22, Orbital Sanctum; same at 16:57, Macgregor Orbital). The OCR read the
+  station reputation ('NEUTBAL', 'CORDIAI') instead of a commodity, EDAP still used the counted position.
+  - UI_Back only if the dialog is still open (OCR of the dialog title, new region 'dialog_title').
+  - Before selecting BUY/SELL: if the station menu ('CONNECTED TO') is shown, the market is opened again.
+  - If the highlighted name is no commodity and the station menu is shown, the selection fails and the purchase
+    is retried after re-entering the market (instead of buying 'blind').
+- Market list: the commodity name is read a second time if the first read is empty (panel fades in).
+
 # 10/20/2026 v1.9.4 b28 - GUI rework
 - Main tab: MODE list with a STOP ALL button and a live STATUS panel (running assist, activity, run time, system /
   station, ship, fuel bar, cargo, waypoint file and next waypoint, jumps). Log with auto-scroll on/off, Clear and

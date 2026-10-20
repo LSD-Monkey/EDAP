@@ -278,18 +278,23 @@ class EDWayPoint:
         for attempt in (1, 2):
             before = int(ap.status.get_cleaned_data()['Cargo'])
             ts = ap.status.current_data['timestamp']
+            mkt.last_select_failed = False
             result, qty = mkt.buy_commodity(ap.keys, name, qty_to_buy, free_cargo)
-            if qty <= 0:
+            if qty <= 0 and not mkt.last_select_failed:
                 return 0  # nothing to buy / not sold here (already logged)
-            ap.status.wait_for_file_change(ts, 6)
-            sleep(0.5)
+            if qty > 0:
+                ap.status.wait_for_file_change(ts, 6)
+                sleep(0.5)
             after = int(ap.status.get_cleaned_data()['Cargo'])
             bought = after - before
             if bought > 0:
                 if bought < qty:
                     self.ap_ckb('log', f"Bought only {bought} of {qty} units of {name}.")
                 return bought
-            self.ap_ckb('log+vce', f"Purchase of {name} not confirmed, cargo unchanged ({after} t).")
+            if mkt.last_select_failed:
+                self.ap_ckb('log+vce', f"Could not select {name} in the market.")
+            else:
+                self.ap_ckb('log+vce', f"Purchase of {name} not confirmed, cargo unchanged ({after} t).")
             if attempt == 1:
                 self.ap_ckb('log', "Leaving and re-entering the market, trying again.")
                 ap.keys.send('UI_Back', repeat=4)

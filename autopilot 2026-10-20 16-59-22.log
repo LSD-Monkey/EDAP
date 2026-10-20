@@ -1,0 +1,3 @@
+16:59:22.614 INFO     Python version: 3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]
+16:59:22.619 WARNING  activate_supercruise_assist: Status.json destination is 'Colonia Orbital', expected 'Jaques Station'
+16:59:22.620 WARNING  activate_supercruise_assist: 'Nowhere' not found in Nav Panel list

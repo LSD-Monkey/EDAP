@@ -240,7 +240,11 @@ class CommoditiesMarket:
                     'commodity_name_col': {'rect': [0.19, 0.227, 0.41, 0.90]},
                     'supply_demand_col': {'rect': [0.42, 0.227, 0.49, 0.90]},
                     # Large name of the highlighted commodity in the info panel right of the list
-                    'selected_name': {'rect': [0.70, 0.183, 0.99, 0.228]}}
+                    'selected_name': {'rect': [0.70, 0.183, 0.99, 0.228]},
+                    # Title of the BUY/SELL COMMODITY dialog ('SELL COMMODITY' at x 0.27-0.41, y 0.20-0.23 in
+                    # the video of session 2026-10-20_16-57-51). Without the dialog only the list header is there.
+                    'dialog_title': {'rect': [0.25, 0.185, 0.52, 0.240]}}
+        self.last_select_failed = False  # the last buy/sell could not select the commodity in the list
         self.commodity_row_width = 422  # Buy/sell item width in pixels at 1920x1080
         self.commodity_row_height = 35  # Buy/sell item height in pixels at 1920x1080
 
@@ -249,18 +253,70 @@ class CommoditiesMarket:
         return re.sub(r'[^A-Z0-9]', '', (txt or '').upper())
 
     def _selected_commodity_name(self) -> str | None:
-        """ OCR of the name of the highlighted commodity (info panel right of the list). """
+        """ OCR of the name of the highlighted commodity (info panel right of the list). The panel fades in after
+        the highlight moved, so a second read is done if the first one is empty. """
+        for attempt in range(2):
+            try:
+                img = self.screen.get_screen_rect_pct(self.reg['selected_name']['rect'])
+                txt = self.ocr.image_simple_ocr(img, 'commodity_selected') if img is not None else None
+            except Exception as e:
+                logger.debug(f"_selected_commodity_name: {e}")
+                txt = None
+            if txt:
+                return " ".join(str(t) for t in txt)
+            sleep(0.5)
+        return None
+
+    # Words of the BUY/SELL dialog title in the supported game languages
+    DIALOG_MARKERS = ('COMMODITY', 'WARE', 'MARCHANDISE', 'MERCANC', 'ТОВАР')
+
+    def _dialog_open(self) -> bool | None:
+        """ True if the BUY/SELL COMMODITY dialog is open, False if not, None if the area could not be read. """
         try:
-            img = self.screen.get_screen_rect_pct(self.reg['selected_name']['rect'])
-            if img is None:
-                return None
-            txt = self.ocr.image_simple_ocr(img, 'commodity_selected')
+            img = self.screen.get_screen_rect_pct(self.reg['dialog_title']['rect'])
+            txt = self.ocr.image_simple_ocr(img, 'commodity_dialog') if img is not None else None
         except Exception as e:
-            logger.debug(f"_selected_commodity_name: {e}")
+            logger.debug(f"_dialog_open: {e}")
             return None
-        if not txt:
-            return None
-        return " ".join(str(t) for t in txt)
+        joined = " ".join(str(t) for t in (txt or [])).upper()
+        found = any(m in joined for m in self.DIALOG_MARKERS)
+        logger.debug(f"Market dialog check: {txt} -> {'open' if found else 'closed'}")
+        return found
+
+    def in_station_menu(self) -> bool:
+        """ True if the station menu ('CONNECTED TO ...') is shown instead of the commodities market. """
+        try:
+            found, _ = self.ocr.is_text_in_region(self.ap.locale["STN_SVCS_CONNECTED_TO"],
+                                                  self.parent.reg['connected_to'])
+            return bool(found)
+        except Exception as e:
+            logger.debug(f"in_station_menu: {e}")
+            return False
+
+    def ensure_market_open(self) -> bool:
+        """ Makes sure the commodities market is shown (and not the station menu). Before, an UI_Back after a
+        transaction left the market when the game had already closed the dialog itself; the following keys
+        then went into the station menu and opened the mission board (video 2026-10-20 17:22). """
+        if not self.in_station_menu():
+            return True
+        self.ap_ckb('log', "Commodities market was left, opening it again.")
+        return self.parent.goto_commodities_market()
+
+    def _close_dialog_after_transaction(self, keys):
+        """ After buying/selling the game closes the dialog itself (videos 2026-10-20), but it has also been seen
+        staying open (0/0, CANCEL selected, video 2026-10-19). UI_Back only if it is still open: a blind UI_Back
+        leaves the market when the dialog is already closed. """
+        sleep(1.0)
+        for _ in range(2):
+            state = self._dialog_open()
+            if state:
+                logger.debug("Market dialog still open, closing it with UI_Back.")
+                keys.send('UI_Back')
+                sleep(0.8)
+                continue
+            break
+        if state is None:
+            logger.debug("Market dialog state unknown (not readable), no UI_Back.")
 
     def _match_item(self, ocr_name: str, items: list) -> int | None:
         """ Index of the list item that best matches the OCR text, or None. """
@@ -295,6 +351,11 @@ class CommoditiesMarket:
             if cur_i is None:
                 if self._norm(name) in self._norm(cur):
                     return True
+                # A text that is no commodity: are we still in the market? ('NEUTBAL'/'CORDIAI' were the
+                # reputation of the station menu, EDAP had left the market and opened the mission board.)
+                if self.in_station_menu():
+                    self.ap_ckb('log', f"Market list: not in the commodities market (read '{cur}').")
+                    return False
                 logger.debug(f"Market list: OCR '{cur}' does not match a list item, using counted position.")
                 return True
             if cur_i == index:
@@ -311,6 +372,8 @@ class CommoditiesMarket:
 
     def select_buy(self, keys) -> bool:
         """ Select Buy. Assumes on Commodities Market screen. """
+        if not self.ensure_market_open():
+            return False
 
         # Select Buy
         keys.send("UI_Left", repeat=2)
@@ -323,7 +386,9 @@ class CommoditiesMarket:
         return True
 
     def select_sell(self, keys) -> bool:
-        """ Select Buy. Assumes on Commodities Market screen. """
+        """ Select Sell. Assumes on Commodities Market screen. """
+        if not self.ensure_market_open():
+            return False
 
         # Select Buy
         keys.send("UI_Left", repeat=2)
@@ -376,7 +441,9 @@ class CommoditiesMarket:
                     self.market_parser.current_data['Items'][i]['StockBracket'] = 0
 
         if index > -1:
+            self.last_select_failed = False
             if not self._goto_list_item(keys, buyable_items, index, name):
+                self.last_select_failed = True
                 self.ap_ckb('log+vce', f"Could not select {name} in the market list, not buying.")
                 return False, 0
 
@@ -433,10 +500,7 @@ class CommoditiesMarket:
             keys.send('UI_Down')
             keys.send('UI_Select')  # Select Buy
             sleep(1.5)  # transaction
-            # Like the sell dialog, the BUY COMMODITY dialog stays open after the purchase: close it, otherwise the
-            # next commodity of the shopping list would be selected inside the dialog.
-            keys.send('UI_Back')  # Close the dialog, back to the commodities list
-            sleep(0.5)
+            self._close_dialog_after_transaction(keys)
 
         return True, act_qty
 
@@ -515,11 +579,7 @@ class CommoditiesMarket:
             keys.send('UI_Down')  # Down to the Sell button (already assume sell all)
             keys.send('UI_Select')  # Select to Sell all
             sleep(1.5)  # transaction
-            # The SELL COMMODITY dialog stays open after the sale (0/0, CANCEL selected, seen in the video of
-            # session 2026-10-19_23-28-31). Without closing it the following 'select BUY' keys went into the
-            # dialog, EDAP stayed in the SELL list and the purchase never happened.
-            keys.send('UI_Back')  # Close the dialog, back to the commodities list
-            sleep(0.5)
+            self._close_dialog_after_transaction(keys)
 
         return True, act_qty
 
