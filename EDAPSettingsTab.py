@@ -79,9 +79,16 @@ SETTINGS: list[dict] = [
          step=60, tip="Max. time to reach the destination. 0 = no limit."),
 
     # --- Docking & departure ------------------------------------------------------------------------------------
-    dict(section="Docking & Departure", key="DockApproachTime", label="Approach before docking request (s)",
-         type="int", min=0, max=120, tip="After the drop: seconds at 100 % throttle towards the station before "
-                                         "docking is requested (then 50 %)."),
+    dict(section="Docking & Departure", key="DockApproachTime", label="Max. approach at 100 % (s)",
+         type="int", min=0, max=120, tip="Docking is requested right after the drop and again every few seconds "
+                                         "while 'too far away'. After this time at 100 % the throttle goes to 50 % "
+                                         "(speed limit in the no-fire zone)."),
+    dict(section="Docking & Departure", key="PlotRouteWhileUndocking", label="Plot the route while undocking",
+         type="bool", tip="Start the launch first and plot the route in the galaxy map while the docking computer "
+                          "flies out of the station (saves ~25 s per station)."),
+    dict(section="Docking & Departure", key="PreRollAfterUndock", label="Roll to the target while mass locked",
+         type="bool", tip="While boosting away from the station: roll so the next target is straight above or "
+                          "below. Then only a pitch (fast) is needed in supercruise."),
     dict(section="Docking & Departure", key="DockingRetries", label="Docking request attempts", type="int",
          min=1, max=60, tip="How often docking is requested (at least 8 are used)."),
     dict(section="Docking & Departure", key="WaitForAutoDockTimer", label="Wait for auto-dock (s)", type="int",
@@ -104,6 +111,13 @@ SETTINGS: list[dict] = [
     dict(section="Navigation & Jumping", key="GalMap_SystemSelectDelay", label="Galaxy map select delay (s)",
          type="float", min=0, max=5, step=0.1, tip="Wait in the galaxy map before the system is selected. "
                                                     "Increase on slow PCs."),
+    dict(section="Navigation & Jumping", key="FSDChargeWhileAligning", label="Charge the FSD while aligning",
+         type="bool", tip="Start the FSD charge (~15 s) before the alignment to the next system. The charged FSD "
+                          "waits until the ship points at the target, then jumps."),
+    dict(section="Navigation & Jumping", key="StarPassTimeNoScoop", label="Fly past the star, no scoop (s)",
+         type="float", min=0, max=30, step=1, tip="After a jump: seconds at 100 % past the arrival star for ships "
+                                                  "without fuel scoop (with scoop: 17 s). Increase if the next "
+                                                  "target is often behind the star."),
 
     # --- Fuel -------------------------------------------------------------------------------------------------
     dict(section="Fuel", key="RefuelThreshold", label="Scoop below (%)", type="int", min=0, max=100,
@@ -126,6 +140,9 @@ SETTINGS: list[dict] = [
          min=0.01, max=1, step=0.01, tip="Pause between repeated key presses."),
     dict(section="Keys & Input", key="Key_ModDelay", label="Modifier key delay (s)", type="float", min=0.0,
          max=0.5, step=0.01, tip="Delay so a modifier (Shift, Ctrl, ...) is detected before/after the key."),
+    dict(section="Keys & Input", key="ThrottleKeyHold", label="Throttle key hold (s)", type="float", min=0.05,
+         max=1.5, step=0.05, tip="Hold time of the throttle keys (0 %, 50 %, 100 %). Was 1 s (3 s after each "
+                                 "jump), ~8 s per jump."),
 
     # --- Overlay ------------------------------------------------------------------------------------------------
     dict(section="Overlay", key="OverlayTextEnable", label="Show overlay text in game", type="bool",
@@ -219,7 +236,14 @@ class SettingsTab:
 
     # ------------------------------------------------------------------------------------------------------------
     def _on_wheel(self, event):
-        self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        if getattr(event, 'num', None) in (4, 5):
+            self.canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+        else:
+            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _on_wheel_widget(self, event):
+        self._on_wheel(event)
+        return "break"  # do not pass the event to the widget class (would change the value)
 
     def _build(self):
         order = []
@@ -289,6 +313,12 @@ class SettingsTab:
                 w = ttk.Entry(frm, textvariable=var, width=12, justify=tk.RIGHT)
             w.grid(row=r, column=1, sticky="E", padx=2, pady=2)
             widgets.append(w)
+            if typ in ('choice', 'int', 'float'):
+                # The mouse wheel over a dropdown/number field must scroll the page and NOT change the value
+                # (2026-10-20 18:09: scrolling the settings changed 'Language' to 'ru').
+                w.bind('<MouseWheel>', self._on_wheel_widget)
+                w.bind('<Button-4>', self._on_wheel_widget)
+                w.bind('<Button-5>', self._on_wheel_widget)
         ToolTip(w, msg=tip, **TIP_STYLE)
 
         self.vars[key] = var

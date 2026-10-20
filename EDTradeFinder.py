@@ -173,11 +173,14 @@ class ArdentClient:
 
 
 def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, arrival_b: float,
-                       round_trip: bool = True, secs_per_jump: float = 110.0,
-                       secs_station: float = 240.0) -> tuple[int, float]:
-    """ Jumps per way and the estimated time in seconds (one way or round trip). Measured in the EDAP logs:
-    ~110 s per jump with alignment and star avoidance, ~4 min per station (approach, docking, trade, undocking),
-    supercruise of 76 Ls ~2 min. """
+                       round_trip: bool = True, secs_per_jump: float = 75.0,
+                       secs_station: float = 340.0) -> tuple[int, float]:
+    """ Jumps per way and the estimated time in seconds (one way or round trip).
+    secs_per_jump: alignment + FSD charge + hyperspace + star avoidance (measured 2026-10-20: ~92 s, less with the
+    FSD charging during the alignment). secs_station: everything at a station except the supercruise flight:
+    arrival in the system, approach + docking (~2.5 min), trade (~1 min), launch until supercruise (~1.5 min)
+    (measured ~5.5 min). Supercruise: ~2 min for 76 Ls, grows with the square root of the distance.
+    learn_timing() replaces both with the values of your own recent flights. """
     # The plotted route is not a straight line (2026-10-20: 93 ly direct, 8 jumps of max. 13.5 ly)
     jumps = max(1, int(math.ceil(distance_ly * 1.12 / max(1.0, jump_range))))
 
@@ -189,6 +192,75 @@ def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, 
     else:
         total = jumps * secs_per_jump + sc(arrival_b) + 2 * secs_station
     return jumps, total
+
+
+def learn_timing(journal_dir: str, max_files: int = 12) -> dict | None:
+    """ Times of your own recent flights from the journals (used for the profit per hour):
+     - secs_per_jump: FSDJump -> next FSDJump of the same flight (align, charge, hyperspace, star avoidance),
+     - secs_station: drop at the station -> docked, docked -> undocked, undocked -> supercruise, + 60 s for the
+       arrival in the system (star avoidance, SC Assist activation). The supercruise flight itself is estimated
+       from the distance of the station.
+    Returns None if there are not enough flights. """
+    import os
+    from os.path import join, getmtime
+    try:
+        files = sorted((join(journal_dir, f) for f in os.listdir(journal_dir)
+                        if f.startswith('Journal.') and f.endswith('.log')), key=getmtime)[-max_files:]
+    except Exception:
+        return None
+
+    def ts(ev):
+        try:
+            return datetime.fromisoformat(ev['timestamp'].replace('Z', '+00:00')).timestamp()
+        except Exception:
+            return None
+
+    jumps, docks, trades, launches = [], [], [], []
+    last_jump = last_drop = last_docked = last_undocked = None
+    for path in files:
+        try:
+            with open(path, encoding='utf-8') as fh:
+                lines = fh.readlines()
+        except Exception:
+            continue
+        for line in lines:
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            e, t = ev.get('event'), ts(ev)
+            if t is None:
+                continue
+            if e == 'FSDJump':
+                if last_jump is not None and 20 < t - last_jump < 400:
+                    jumps.append(t - last_jump)
+                last_jump = t
+            elif e == 'SupercruiseExit':
+                last_drop, last_jump = t, None
+            elif e == 'Docked':
+                if last_drop is not None and 20 < t - last_drop < 600:
+                    docks.append(t - last_drop)
+                last_docked, last_drop, last_jump = t, None, None
+            elif e == 'Undocked':
+                if last_docked is not None and 10 < t - last_docked < 900:
+                    trades.append(t - last_docked)
+                last_undocked, last_docked = t, None
+            elif e == 'StartJump' and ev.get('JumpType') == 'Supercruise':
+                if last_undocked is not None and 5 < t - last_undocked < 400:
+                    launches.append(t - last_undocked)
+                last_undocked = None
+            elif e in ('LoadGame', 'Shutdown', 'Died'):
+                last_jump = last_drop = last_docked = last_undocked = None
+
+    def med(v):
+        v = sorted(v)
+        return v[len(v) // 2] if v else None
+
+    if len(jumps) < 3 or not docks or not trades or not launches:
+        return None
+    return {'secs_per_jump': med(jumps),
+            'secs_station': med(docks) + med(trades) + med(launches) + 60.0,
+            'samples': len(jumps)}
 
 
 class TradeFinder:
@@ -272,9 +344,14 @@ class TradeFinder:
     def find_routes(self, ref_system: str, cargo: int, max_start_distance: float = 50, max_hop_distance: float = 50,
                     min_volume: int = 0, max_arrival_ls: float = 5000, max_age_hours: float = 24, min_pad: int = 3,
                     carriers: bool = False, megaships: bool = False, planetary: bool = False,
-                    settlements: bool = False, round_trips: bool = True, commodity_count: int = 50,
-                    jump_range: float = 15.0, secs_per_jump: float = 110.0, top_per_side: int = 60,
-                    max_results: int = 100) -> list[dict]:
+                    settlements: bool = False, round_trips: bool = True, commodity_count: int = 80,
+                    jump_range: float = 15.0, secs_per_jump: float = 75.0, secs_station: float = 340.0,
+                    max_results: int = 150, legs_per_commodity: int = 4000) -> list[dict]:
+        """ All sellers x all buyers of every commodity are paired (numpy), not only the cheapest/most expensive
+        60 of the whole search area: with a large area the best buyer near a seller was often not among them, that
+        was the main reason why Inara found better routes. """
+        import numpy as np
+
         cargo = max(1, int(cargo))
         min_volume = int(min_volume) if min_volume and min_volume > 0 else cargo
         f = dict(carriers=carriers, megaships=megaships, planetary=planetary, settlements=settlements,
@@ -302,72 +379,117 @@ class TradeFinder:
 
         stations: dict[str, dict] = {}
         legs: dict[tuple[str, str], dict] = {}  # (seller, buyer) -> best leg
+        sell_at: dict[str, dict[str, tuple]] = {}  # commodity -> station -> (buy price, stock, age) (we can buy)
+        buy_at: dict[str, dict[str, tuple]] = {}  # commodity -> station -> (sell price, demand, age) (we can sell)
+        names: dict[str, str] = {}
         done = 0
-        with ThreadPoolExecutor(max_workers=4) as pool:
+
+        def pos(row):
+            p = (row.get('systemX'), row.get('systemY'), row.get('systemZ'))
+            return None if None in p else p
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
             for sym, ex, im in pool.map(load, symbols):
                 done += 1
-                sellers = [r for r in ex if (r.get('buyPrice') or 0) > 0 and self._ok(r, f)]
-                buyers = [r for r in im if (r.get('sellPrice') or 0) > 0 and self._ok(r, f)]
-                sellers.sort(key=lambda r: r.get('buyPrice') or 0)
-                buyers.sort(key=lambda r: r.get('sellPrice') or 0, reverse=True)
-                sellers, buyers = sellers[:top_per_side], buyers[:top_per_side]
-                name = display_name(sym)
-                for s_row in sellers:
-                    ks = self._key(s_row)
-                    st_s = stations.setdefault(ks, self._station(s_row))
-                    for b_row in buyers:
-                        profit = int(b_row.get('sellPrice') or 0) - int(s_row.get('buyPrice') or 0)
-                        if profit <= 0:
-                            break  # buyers are sorted by price, the rest is worse
-                        kb = self._key(b_row)
-                        if kb == ks:
-                            continue
-                        st_b = stations.setdefault(kb, self._station(b_row))
-                        d = self._dist(st_s, st_b)
-                        if d is None or d > max_hop_distance:
-                            continue
-                        stock = int(s_row.get('stock') or 0)
-                        demand = int(b_row.get('demand') or 0)
-                        amount = min(cargo, stock if stock > 0 else cargo, demand if demand > 0 else cargo)
-                        total = amount * profit
-                        leg = legs.get((ks, kb))
-                        if leg is None or total > leg['total']:
-                            legs[(ks, kb)] = {
-                                'symbol': sym, 'name': name, 'buy': int(s_row.get('buyPrice') or 0),
-                                'sell': int(b_row.get('sellPrice') or 0), 'profit': profit, 'amount': amount,
-                                'total': total, 'distance': d,
-                                'age_h': max([a for a in (age_hours(s_row.get('updatedAt')),
-                                                          age_hours(b_row.get('updatedAt'))) if a is not None],
-                                             default=None),
-                                'supply': stock, 'demand': demand,
-                            }
+                names[sym] = display_name(sym)
+                sellers = [r for r in ex if (r.get('buyPrice') or 0) > 0 and pos(r) and self._ok(r, f)]
+                buyers = [r for r in im if (r.get('sellPrice') or 0) > 0 and pos(r) and self._ok(r, f)]
+                sa, ba = {}, {}
+                for r in sellers:
+                    k = self._key(r)
+                    stations.setdefault(k, self._station(r))
+                    sa[k] = (int(r['buyPrice']), int(r.get('stock') or 0), age_hours(r.get('updatedAt')))
+                for r in buyers:
+                    k = self._key(r)
+                    stations.setdefault(k, self._station(r))
+                    ba[k] = (int(r['sellPrice']), int(r.get('demand') or 0), age_hours(r.get('updatedAt')))
+                sell_at[sym], buy_at[sym] = sa, ba
+                if sa and ba:
+                    sk, bk = list(sa), list(ba)
+                    sp = np.array([stations[k]['pos'] for k in sk], dtype=float)
+                    bp = np.array([stations[k]['pos'] for k in bk], dtype=float)
+                    buy = np.array([sa[k][0] for k in sk], dtype=float)
+                    stock = np.array([sa[k][1] if sa[k][1] > 0 else cargo for k in sk], dtype=float)
+                    sell = np.array([ba[k][0] for k in bk], dtype=float)
+                    demand = np.array([ba[k][1] if ba[k][1] > 0 else cargo for k in bk], dtype=float)
+                    dist = np.sqrt(((sp[:, None, :] - bp[None, :, :]) ** 2).sum(axis=2))
+                    profit = sell[None, :] - buy[:, None]
+                    amount = np.minimum(np.minimum(stock[:, None], demand[None, :]), cargo)
+                    total = profit * amount
+                    ok = (dist <= max_hop_distance) & (profit > 0) & (dist > 0.01)
+                    total = np.where(ok, total, -1.0)
+                    flat = total.ravel()
+                    cnt = int((flat > 0).sum())
+                    if cnt:
+                        k_best = min(cnt, legs_per_commodity)
+                        idx = np.argpartition(-flat, k_best - 1)[:k_best]
+                        for fi in idx:
+                            i, j = divmod(int(fi), len(bk))
+                            t = float(flat[fi])
+                            if t <= 0:
+                                continue
+                            key = (sk[i], bk[j])
+                            leg = legs.get(key)
+                            if leg is None or t > leg['total']:
+                                ages = [a for a in (sa[sk[i]][2], ba[bk[j]][2]) if a is not None]
+                                legs[key] = {
+                                    'symbol': sym, 'name': names[sym], 'buy': int(buy[i]), 'sell': int(sell[j]),
+                                    'profit': int(profit[i, j]), 'amount': int(amount[i, j]), 'total': int(t),
+                                    'distance': float(dist[i, j]), 'age_h': max(ages) if ages else None,
+                                    'supply': sa[sk[i]][1], 'demand': ba[bk[j]][1],
+                                }
                 self.progress(f"Commodities checked: {done}/{len(symbols)}, {len(legs)} trades found.")
 
         if self.rejected:
             logger.info("Trade finder: stations skipped: " +
                         ", ".join(f"{k} {v}" for k, v in sorted(self.rejected.items())))
 
+        def best_leg(ka: str, kb: str) -> dict | None:
+            """ Best commodity from station ka to kb (also commodities that were not among the best trades). """
+            leg = legs.get((ka, kb))
+            best = dict(leg) if leg else None
+            for sym, sa in sell_at.items():
+                s_ = sa.get(ka)
+                b_ = buy_at[sym].get(kb) if s_ else None
+                if not s_ or not b_:
+                    continue
+                profit = b_[0] - s_[0]
+                if profit <= 0:
+                    continue
+                amount = min(cargo, s_[1] if s_[1] > 0 else cargo, b_[1] if b_[1] > 0 else cargo)
+                total = profit * amount
+                if best is None or total > best['total']:
+                    ages = [a for a in (s_[2], b_[2]) if a is not None]
+                    best = {'symbol': sym, 'name': names[sym], 'buy': s_[0], 'sell': b_[0], 'profit': profit,
+                            'amount': amount, 'total': total,
+                            'distance': self._dist(stations[ka], stations[kb]) or 0.0,
+                            'age_h': max(ages) if ages else None, 'supply': s_[1], 'demand': b_[1]}
+            return best
+
         routes = []
+        ranked = sorted(legs.items(), key=lambda kv: kv[1]['total'], reverse=True)
         if round_trips:
             seen = set()
-            for (ka, kb), out in legs.items():
-                back = legs.get((kb, ka))
-                if back is None or (kb, ka) in seen:
+            for (ka, kb), out in ranked[:25000]:
+                pair = (ka, kb) if ka < kb else (kb, ka)
+                if pair in seen:
                     continue
-                seen.add((ka, kb))
+                seen.add(pair)
+                back = best_leg(kb, ka)
                 a, b = stations[ka], stations[kb]
-                # Start at the station that is closer to the reference system
-                if b['dist_ref'] < a['dist_ref']:
-                    a, b, out, back = b, a, back, out
+                if back is not None:
+                    # Start at the station that is closer to the reference system
+                    if b['dist_ref'] < a['dist_ref'] and b['dist_ref'] <= max_start_distance:
+                        a, b, out, back = b, a, back, out
                 if a['dist_ref'] > max_start_distance:
                     continue
-                routes.append(self._route(a, b, out, back, jump_range, secs_per_jump))
+                routes.append(self._route(a, b, out, back, jump_range, secs_per_jump, secs_station, True))
         else:
-            for (ka, kb), out in legs.items():
+            for (ka, kb), out in ranked:
                 a, b = stations[ka], stations[kb]
                 if a['dist_ref'] > max_start_distance:
                     continue
-                routes.append(self._route(a, b, out, None, jump_range, secs_per_jump))
+                routes.append(self._route(a, b, out, None, jump_range, secs_per_jump, secs_station, False))
 
         routes.sort(key=lambda r: r['profit_hour'], reverse=True)
         self.progress(f"{len(routes)} {'round trips' if round_trips else 'trades'} found "
@@ -375,9 +497,13 @@ class TradeFinder:
         return routes[:max_results]
 
     @staticmethod
-    def _route(a: dict, b: dict, out: dict, back: dict | None, jump_range: float, secs_per_jump: float) -> dict:
+    def _route(a: dict, b: dict, out: dict, back: dict | None, jump_range: float, secs_per_jump: float,
+               secs_station: float = 340.0, round_trip: bool | None = None) -> dict:
+        if round_trip is None:
+            round_trip = back is not None
         jumps, secs = estimate_trip_secs(out['distance'], jump_range, a['arrival_ls'], b['arrival_ls'],
-                                         round_trip=back is not None, secs_per_jump=secs_per_jump)
+                                         round_trip=round_trip, secs_per_jump=secs_per_jump,
+                                         secs_station=secs_station)
         profit = out['total'] + (back['total'] if back else 0)
         ages = [x for x in (out.get('age_h'), back.get('age_h') if back else None) if x is not None]
         return {
@@ -391,7 +517,7 @@ class TradeFinder:
             'back_name': back['name'] if back else '', 'back_buy': back['buy'] if back else 0,
             'back_sell': back['sell'] if back else 0, 'back_profit': back['profit'] if back else 0,
             'back_amount': back['amount'] if back else 0, 'back_total': back['total'] if back else 0,
-            'round_trip': back is not None,
+            'round_trip': round_trip,
             'profit_trip': profit, 'profit_hour': profit * 3600.0 / secs,
             'age_h': max(ages) if ages else None,
             'capital_needed': max(out['buy'] * out['amount'], (back['buy'] * back['amount']) if back else 0),

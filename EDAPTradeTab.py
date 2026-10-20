@@ -16,7 +16,7 @@ from tkinter import ttk, messagebox
 from tktooltip import ToolTip
 
 from EDlogger import logger
-from EDTradeFinder import TradeFinder, route_to_waypoints
+from EDTradeFinder import TradeFinder, route_to_waypoints, learn_timing
 
 TIP = dict(delay=0.6, bg="#808080", fg="#FFFFFF")
 
@@ -137,7 +137,7 @@ class TradeTab:
         bar.grid(row=5, column=0, columnspan=6, sticky="EW", pady=(6, 0))
         bar.columnconfigure(0, weight=1)
         self.lbl_status = ttk.Label(bar, text="Market data: Ardent Insight (EDDN, uploaded by players).",
-                                    foreground="#9a9a9a")
+                                    foreground="#9a9a9a", wraplength=760, justify=tk.LEFT)
         self.lbl_status.grid(row=0, column=0, sticky="W")
         self.btn_search = ttk.Button(bar, text="Search", style="Accent.TButton", command=self.search, width=14)
         self.btn_search.grid(row=0, column=1, sticky="E")
@@ -250,7 +250,8 @@ class TradeTab:
                       round_trips=self.v_mode.get() == "Round trips",
                       commodity_count=self._num(self.v_count, 50, int),
                       jump_range=self._num(self.v_jump, 15),
-                      secs_per_jump=float(self.ap.config.get('TradeSecsPerJump', 110)))
+                      secs_per_jump=float(self.ap.config.get('TradeSecsPerJump', 75)),
+                      secs_station=float(self.ap.config.get('TradeSecsPerStation', 340)))
         cfg = self.ap.config
         cfg.update({'TradeSearchRadius': params['max_start_distance'], 'TradeMaxHopDistance': params['max_hop_distance'],
                     'TradeMaxArrivalLs': params['max_arrival_ls'], 'TradeMaxAgeHours': params['max_age_hours'],
@@ -265,8 +266,18 @@ class TradeTab:
         self.routes = []
         self.lbl_details.configure(text="")
 
+        journal_dir = os.path.dirname(self.ap.jn.current_log) if getattr(self.ap.jn, 'current_log', None) else None
+
         def worker():
             try:
+                # Times of your own recent flights (per jump, per station) for the profit per hour
+                timing = learn_timing(journal_dir) if journal_dir else None
+                if timing:
+                    params['secs_per_jump'] = timing['secs_per_jump']
+                    params['secs_station'] = timing['secs_station']
+                    self._q.put(('progress', f"Times of your last flights: {timing['secs_per_jump']:.0f} s per jump, "
+                                             f"{timing['secs_station'] / 60:.1f} min per station."))
+                self._timing = (params['secs_per_jump'], params['secs_station'], bool(timing))
                 finder = TradeFinder(progress=lambda m: self._q.put(('progress', m)))
                 routes = finder.find_routes(**params)
                 skipped = ", ".join(f"{k} {v}" for k, v in sorted(finder.rejected.items()))
@@ -291,8 +302,12 @@ class TradeTab:
                     self.fill_tree()
                     msg = f"{len(routes)} routes found." if routes else \
                         "No profitable route found. Try larger distances, an older price age or fewer filters."
+                    tm = getattr(self, '_timing', None)
+                    if tm:
+                        msg += (f"  Time: {tm[0]:.0f} s/jump, {tm[1] / 60:.1f} min/station"
+                                f"{' (from your journals)' if tm[2] else ''}.")
                     if skipped:
-                        msg += f"  Stations skipped: {skipped}."
+                        msg += f"  Skipped: {skipped}."
                     self.lbl_status.configure(text=msg)
                 elif kind == 'error':
                     self._busy = False
@@ -320,8 +335,10 @@ class TradeTab:
         self.tree.delete(*self.tree.get_children())
         for i, r in enumerate(self.routes):
             out = f"{r['out_name']} +{r['out_profit']:,}"
-            if r.get('round_trip'):
+            if r.get('round_trip') and r.get('back_name'):
                 back = f"{r['back_name']} +{r['back_profit']:,}"
+            elif r.get('round_trip'):
+                back = "- (back empty)"
             else:
                 back = "(one way)"
             self.tree.insert('', 'end', iid=str(i), values=(
@@ -353,9 +370,11 @@ class TradeTab:
                f"Sell at {r['station']} ({r['system']}, {r['distance']:.0f} ly, ~{r['jumps']} jumps, "
                f"{r['arrival_ls']:.0f} Ls, {r['station_type'] or '?'}) for {r['out_sell']:,} cr "
                f"(demand {r['out_demand']:,}): +{fmt_cr(r['out_total'])}.\n")
-        if r.get('round_trip'):
+        if r.get('round_trip') and r.get('back_name'):
             txt += (f"Back: buy {r['back_amount']} t {r['back_name']} at {r['back_buy']:,} cr, sell at "
                     f"{r['start_station']} for {r['back_sell']:,} cr: +{fmt_cr(r['back_total'])}.\n")
+        elif r.get('round_trip'):
+            txt += "Back: no profitable commodity, the ship flies back empty.\n"
         txt += (f"{'Round trip' if r.get('round_trip') else 'Trip'} ~{mins:.0f} min, {fmt_cr(r['profit_trip'])} cr, "
                 f"~{fmt_cr(r['profit_hour'])} cr/h. Capital needed: {fmt_cr(r['capital_needed'])} cr.")
         self.lbl_details.configure(text=txt)
@@ -392,7 +411,9 @@ class TradeTab:
             return
         if r.get('round_trip'):
             what = (f"{r['start_station']} ({r['start_system']})  <->  {r['station']} ({r['system']})\n"
-                    f"Buy {r['out_name']}, sell it, bring back {r['back_name']}. Repeated until you stop it.\n\n"
+                    f"Buy {r['out_name']}, sell it, "
+                    f"{'bring back ' + r['back_name'] if r.get('back_name') else 'fly back empty'}. "
+                    f"Repeated until you stop it.\n\n"
                     f"~{fmt_cr(r['profit_trip'])} cr per round trip.")
         else:
             what = (f"{r['start_station']} ({r['start_system']})  ->  {r['station']} ({r['system']})\n"

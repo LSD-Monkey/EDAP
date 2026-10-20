@@ -39,9 +39,10 @@ it. **Save as waypoint file** only writes and loads the file.
 
 * Market data comes from the [Ardent Insight API](https://github.com/iaincollins/ardent-api) (EDDN data uploaded by
   players, the same source Inara and others use).
-* For every commodity (the most valuable first) the sellers and the buyers around the reference system are loaded.
-  Every seller/buyer pair within the max. distance between the stations is a trade; trades A->B and B->A make a
-  round trip.
+* For every commodity (the most valuable first) the sellers and the buyers around the reference system are loaded
+  (Ardent returns max. 1000 of each per commodity). Every seller/buyer pair within the max. distance between the
+  stations is a trade; for a round trip the best commodity for the way back is searched among all commodities. If
+  there is none, the route is shown with "- (back empty)".
 * Always excluded: construction sites and colonisation ships. Stations with unknown pad size are excluded when
   pad M or L is required.
 * Time estimate: ~110 s per jump (`TradeSecsPerJump` in AP.json, measured with EDAP incl. alignment and star

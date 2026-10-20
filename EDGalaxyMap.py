@@ -169,7 +169,7 @@ class EDGalaxyMap:
             sleep(0.3)
             ap.keys.send('UI_Select')
             # The map flies to the system and opens the SYSTEM INFORMATION panel
-            sleep(max(self.SystemSelectDelay, 3.0))
+            sleep(max(self.SystemSelectDelay, 2.5))
 
             # Sequence designed by the user and recorded 5x in a row with success (session 2026-10-19_08-27-25,
             # NavRoute 0.3-0.8 s after the last UI_Select):
@@ -179,11 +179,12 @@ class EDGalaxyMap:
             wake = ap.keys.get_primary_scancode('UI_Right') or SCANCODE['Key_D']
             logger.debug(f"Galaxy Map: tap primary UI_Right key (scancode {wake}) to restore the UI focus.")
             ap.keys.tap_scancode(wake, hold=0.12)
-            sleep(0.7)
+            sleep(0.5)
             ap.keys.send('UI_Right')
-            sleep(0.7)
-            ap.keys.send('UI_Down', repeat=7, repeat_delay=0.25)
-            sleep(0.6)
+            sleep(0.5)
+            # short presses (the 7 presses took 4.3 s with the default hold time)
+            ap.keys.send('UI_Down', hold=0.08, repeat=7, repeat_delay=0.15)
+            sleep(0.5)
             ap.keys.send('UI_Select')
 
             if ap.nav_route is None:
@@ -242,10 +243,10 @@ class EDGalaxyMap:
         ap.keys.send('UI_Select')  # open search field
         sleep(0.5)
 
-        typewrite(target_name_uc, interval=0.2)
+        typewrite(target_name_uc, interval=0.15)
         logger.debug(f"Entered system name: {target_name_uc}.")
         # The suggestion list needs a moment ('TYPE AT LEAST 2 CHARACTERS...' is shown until it is ready)
-        sleep(2.5)
+        sleep(2.0)
 
     def set_next_system(self, ap, target_system) -> bool:
         """ Sets the next system to jump to, or the final system to jump to.
@@ -294,7 +295,7 @@ class EDGalaxyMap:
                 return False
             # No OCR check of the 'CARTOGRAPHICS' title any more: it took several seconds per try and did not
             # work on 21:9 screens. GuiFocus is reliable, the map only needs a moment to accept input.
-            sleep(2.0)
+            sleep(1.5)
 
             self.keys.send('UI_Up')  # Go up to search bar
             return True

@@ -1510,6 +1510,17 @@ def apply_theme_to_titlebar(root):
         root.wm_attributes("-alpha", 1)
 
 
+def disable_wheel_value_change(root):
+    """ The mouse wheel must never change a dropdown or number field by accident (it did while scrolling the
+    settings: 'Language' became 'ru'). Values are changed by clicking/typing only. """
+    for cls in ('TCombobox', 'TSpinbox'):
+        for ev in ('<MouseWheel>', '<Button-4>', '<Button-5>', '<Shift-MouseWheel>'):
+            try:
+                root.bind_class(cls, ev, lambda e: "break")
+            except tk.TclError:
+                pass
+
+
 def _enable_crash_logging():
     """ Hard crashes (e.g. inside OCR/native libraries) end the process without a Python traceback in
     autopilot.log. faulthandler writes the stack of all threads to crash.log in that case, and uncaught
@@ -1546,6 +1557,7 @@ def main():
     app = APGui(root)
 
     sv_ttk.set_theme("dark")
+    disable_wheel_value_change(root)
 
     # Remove focus outline from tabs by setting focuscolor to the background color
     style = ttk.Style()

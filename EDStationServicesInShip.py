@@ -240,7 +240,9 @@ class CommoditiesMarket:
                     'commodity_name_col': {'rect': [0.19, 0.227, 0.41, 0.90]},
                     'supply_demand_col': {'rect': [0.42, 0.227, 0.49, 0.90]},
                     # Large name of the highlighted commodity in the info panel right of the list
-                    'selected_name': {'rect': [0.70, 0.183, 0.99, 0.228]},
+                    # 0.70 cut off the start of the name ('TICAPPLIANCES' for DOMESTIC APPLIANCES, 'SILVER' not
+                    # readable, 2026-10-20 18:29/18:45). The name starts at ~0.688 on 3440x1440.
+                    'selected_name': {'rect': [0.678, 0.183, 0.99, 0.228]},
                     # Title of the BUY/SELL COMMODITY dialog ('SELL COMMODITY' at x 0.27-0.41, y 0.20-0.23 in
                     # the video of session 2026-10-20_16-57-51). Without the dialog only the list header is there.
                     'dialog_title': {'rect': [0.25, 0.185, 0.52, 0.240]}}
@@ -346,10 +348,36 @@ class CommoditiesMarket:
         EDAP opened the buy dialog of LITHIUM instead of SILVER (video 2026-10-19). If the OCR shows another item
         of the list, the difference is corrected with up/down. If the name can not be read at all, the counted
         position is used as before. Returns False only if the right item could not be reached. """
-        keys.send('UI_Up', hold=5.0)  # go up to top of list
-        sleep(1.0)
-        if index > 0:
-            keys.send('UI_Down', hold=0.08, repeat=index, repeat_delay=0.12)
+        n = len(items)
+        per_item = 0.2  # one 'down' press incl. pause
+        # 1. Where is the highlight now? Usually at the top of the list after entering it: if the name can be read,
+        #    the 5 s 'hold up' is not needed.
+        sleep(0.4)
+        cur = self._selected_commodity_name()
+        cur_i = self._match_item(cur, items) if cur else None
+        if cur_i is not None:
+            direct = abs(index - cur_i) * per_item
+            bottom_hold = max(3.0, 0.08 * n)
+            via_bottom = bottom_hold + 1.0 + (n - 1 - index) * per_item
+            if via_bottom < direct - 2.0:
+                # Item far down the list: go to the bottom and count up (Rutile at 82 of 85 needed 81 presses, 16 s)
+                keys.send('UI_Down', hold=bottom_hold)
+                sleep(0.6)
+                cur = self._selected_commodity_name()
+                cur_i2 = self._match_item(cur, items) if cur else None
+                start_i = cur_i2 if cur_i2 is not None else n - 1
+                logger.debug(f"Market list: from the bottom (at {start_i + 1} of {n}), moving {index - start_i:+d}.")
+                self._move(keys, index - start_i)
+            else:
+                logger.debug(f"Market list: highlight at '{items[cur_i]['Name_Localised']}', moving "
+                             f"{index - cur_i:+d} to '{name}'.")
+                self._move(keys, index - cur_i)
+        else:
+            # 2. Name not readable: counted from the top as before
+            keys.send('UI_Up', hold=5.0)  # go up to top of list
+            sleep(1.0)
+            if index > 0:
+                keys.send('UI_Down', hold=0.08, repeat=index, repeat_delay=0.12)
         corrected = 0
         for attempt in range(4):
             sleep(0.7)
@@ -386,6 +414,13 @@ class CommoditiesMarket:
                 keys.send('UI_Up', hold=0.08, repeat=-delta, repeat_delay=0.15)
         self.last_select_info = "FAILED: could not reach the item after 4 corrections"
         return False
+
+    @staticmethod
+    def _move(keys, delta: int):
+        if delta > 0:
+            keys.send('UI_Down', hold=0.08, repeat=delta, repeat_delay=0.12)
+        elif delta < 0:
+            keys.send('UI_Up', hold=0.08, repeat=-delta, repeat_delay=0.12)
 
     def select_buy(self, keys) -> bool:
         """ Select Buy. Assumes on Commodities Market screen. """

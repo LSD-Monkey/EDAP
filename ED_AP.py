@@ -190,6 +190,7 @@ class EDAutopilot:
         self.robigo_assist_enabled = False
         self.dss_assist_enabled = False
         self.single_waypoint_enabled = False
+        self._launched_early = False
         self.market_test_enabled = False
         self._market_test_params = ('', 1, True)
 
@@ -444,20 +445,26 @@ class EDAutopilot:
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
             "WaypointRestartDelay": 10,  # Waypoint: secs to wait before an auto-restart / a new station attempt
-            "RandomnessScale": 1.0,  # EnableRandomness: factor for the random pauses (0.5 = shorter, 2 = longer)
+            "RandomnessScale": 0.5,  # EnableRandomness: factor for the random pauses (0.5 = shorter, 2 = longer)
+            "FSDChargeWhileAligning": True,  # start the FSD charge before aligning to the next system (~15 s/jump)
+            "StarPassTimeNoScoop": 8,  # secs at 100% past the arrival star when no fuel scoop is fitted (was 17)
+            "ThrottleKeyHold": 0.25,  # hold time of the throttle preset keys (was 1 s, 3 s after a jump)
+            "PlotRouteWhileUndocking": True,  # launch first, plot the route while the docking computer flies out
+            "PreRollAfterUndock": True,  # roll the next target onto the pitch axis while mass locked
             "TradeSearchRadius": 50,  # Trade tab: max. distance from the reference system to the start station
             "TradeMaxHopDistance": 50,  # Trade tab: max. distance between the two stations in ly
             "TradeMaxArrivalLs": 5000,  # Trade tab: max. distance of a station from the arrival star
             "TradeMaxAgeHours": 24,  # Trade tab: ignore market data older than this
             "TradeMinVolume": 0,  # Trade tab: min. supply/demand (0 = cargo capacity)
-            "TradeCommodityCount": 50,  # Trade tab: number of commodities searched (most valuable first)
+            "TradeCommodityCount": 80,  # Trade tab: number of commodities searched (most valuable first)
             "TradeIncludeCarriers": False,  # Trade tab: include fleet carriers
             "TradeIncludeMegaships": False,  # Trade tab: include megaships
             "TradeIncludePlanetary": False,  # Trade tab: include planetary ports
             "TradeIncludeSettlements": False,  # Trade tab: include Odyssey settlements
             "TradeMode": "Round trips",  # Trade tab: 'Round trips' or 'One way'
             "TradeSortBy": "Profit per hour",  # Trade tab: sort order
-            "TradeSecsPerJump": 110,  # Trade tab: time estimate per jump incl. alignment (measured ~110 s)
+            "TradeSecsPerJump": 75,  # Trade tab: time per jump if it can not be learned from the journals
+            "TradeSecsPerStation": 340,  # Trade tab: time per station (without supercruise) if not learned
         }
 
     def _load_config_file(self, defaults: dict):
@@ -1606,6 +1613,62 @@ class EDAutopilot:
         # Reset disengage latch, in case it was latched.
         self._sc_disengage_active = False
 
+    def can_launch_early(self) -> bool:
+        """ Docked at a starport/outpost with an advanced docking computer: the launch can be started before the
+        route is plotted (the route is plotted while the docking computer flies out). """
+        if not self.config.get('PlotRouteWhileUndocking', True):
+            return False
+        try:
+            if not self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsHasLatLong):
+                return False
+            st = self.jn.ship_state()
+            if st['exp_station_type'] in (StationType.FleetCarrier, StationType.SquadronCarrier,
+                                          StationType.SpaceConstructionDepot):
+                return False
+            return bool(st['has_adv_dock_comp'])
+        except Exception:
+            return False
+
+    def start_launch(self):
+        """ Starts the auto launch and returns at once (see finish_launch()). """
+        self.update_ap_status("Executing Undocking/Launch")
+        self.ap_ckb('log', "Launching, the route is plotted while the docking computer flies out.")
+        self.undock()
+        self._launched_early = True
+        sleep(1.5)  # station menu closes
+
+    def finish_launch(self):
+        """ Waits until the docking computer has left the station, then engages supercruise. """
+        self._launched_early = False
+        t0 = time.time()
+        while self.jn.ship_state()['status'] != 'in_space':
+            if time.time() - t0 > 240:
+                raise Exception('Launch did not complete within 4 minutes')
+            sleep(0.5)
+        self.update_ap_status("Undock Complete, accelerating")
+        self.sc_engage(True)
+
+    def _pre_roll_to_target(self):
+        """ While still mass locked after the launch: roll so that the next target is straight above or below.
+        Rolling does not change the flight path (no collision risk near the station) and afterwards only a pitch
+        (fast axis) is needed in supercruise instead of pitch + slow yaw. """
+        if not self.config.get('PreRollAfterUndock', True):
+            return
+        try:
+            off = self.get_compass_target_offset()
+            if off is None:
+                return
+            if abs(off['yaw']) < 10 and abs(off['pit']) < 10:
+                return  # already ahead
+            roll = off['roll'] if abs(off['roll']) <= 90 else off['roll'] - math.copysign(180, off['roll'])
+            if abs(roll) > 10:
+                logger.debug(f"Pre-roll after undock: {roll:.0f} deg (target yaw {off['yaw']:.0f}, pit {off['pit']:.0f}).")
+                self.ship_control.roll_clockwise_anticlockwise(roll)
+        except EDAP_Interrupt:
+            raise
+        except Exception as e:
+            logger.debug(f"pre-roll: {e}")
+
     def undock(self):
         """ Performs menu action to undock from Station """
         self.random_pause(3.0)
@@ -1633,45 +1696,39 @@ class EDAutopilot:
         will wait a configurable time for dock.  Perform Refueling and Repair.
         """
         # if not in normal space, give a few more sections as at times it will take a little bit
-        if self.jn.ship_state()['status'] != "in_space":
-            sleep(3)  # sleep a little longer
-
-        if self.jn.ship_state()['status'] != "in_space":
-            logger.error('In dock(), after wait, but still not in_space')
-
-        sleep(5)  # wait 5 seconds to get to 7.5km to request docking
-        # Full throttle for the approach: the drop is at ~11.5 km and docking is only possible below 7.5 km. With
-        # 50% a Type-9 needed 2:20 min (video 2026-10-19). The no-fire zone (speed limit 100 m/s) starts at
-        # ~7.5-8 km, so we go back to 50% before requesting docking.
-        self.set_throttle_100()
+        t0 = time.time()
+        while self.jn.ship_state()['status'] != "in_space" and time.time() - t0 < 4:
+            sleep(0.25)
 
         if self.jn.ship_state()['status'] != "in_space":
             self.set_throttle_0()
-            logger.error('In dock(), after long wait, but still not in_space')
+            logger.error('In dock(), after wait, but still not in_space')
             raise Exception('Docking failed (not in space)')
 
-        # Fly towards the station (100% throttle, see above). Configurable, slow/heavy ships need longer.
-        approach = self.config.get('DockApproachTime', 20)
-        self.ap_ckb('log', f"Approaching the station for {approach} s before requesting docking.")
-        sleep(approach)
-        self.set_throttle_50()  # below the no-fire zone speed limit before we get there
-        # Request docking while still flying towards the station. A 'too far away' denial costs nothing, so we
-        # keep the 50% throttle and ask again every few seconds instead of stop-and-go (the old way needed up
-        # to 2.5 min after the drop with 3 denials at 7.5+ km).
+        # Full throttle for the approach (the drop is at ~11.5 km, docking is possible below 7.5 km) and request
+        # docking at once. A 'too far away' denial costs nothing: we keep approaching and ask again. Granted, the
+        # docking computer takes over. 'DockApproachTime' is now the max. time at 100% before going to 50%
+        # (speed limit 100 m/s in the no-fire zone). Before, EDAP flew 5 + 20 s before the first request.
+        self.set_throttle_100()
+        t_drop = time.time()
+        approach = float(self.config.get('DockApproachTime', 20))
         self.ap_ckb('log+vce', "Initiating Docking Procedure")
         self.request_docking()
         sleep(1.5)
 
         tries = max(int(self.config['DockingRetries']), 8)
         granted = self.jn.ship_state()['status'] == "dockinggranted"
+        slowed = False
         for i in range(tries):
             if granted:
                 break
             reason = self.jn.ship_state()['no_dock_reason']
             if reason == "Distance":
+                if not slowed and time.time() - t_drop >= approach:
+                    self.set_throttle_50()  # below the no-fire zone speed limit
+                    slowed = True
                 self.ap_ckb('log', "Docking denied (too far away), still approaching.")
-                self.set_throttle_50()
-                sleep(6)
+                sleep(3)
             else:
                 # Other reasons (no free pad, ...): stop and wait before asking again
                 self.set_throttle_0(repeat=2)
@@ -1765,6 +1822,8 @@ class EDAutopilot:
         pitching to put the nav point in the middle of the compass, i.e. target right in front of us.
         @return: True if aligned, else False.
         """
+        if self._jump_started():
+            return True  # the pre-charged FSD already jumps
         if not self._is_in_supercruise_or_space():
             logger.error('align=err1, nav_align not in super or space')
             raise Exception('nav_align not in super or space')
@@ -1802,10 +1861,16 @@ class EDAutopilot:
             close = 30.0  # in degrees
 
             # Roll if the nav point is not directly behind us, or in front of us.
-            if ((((-180 + close) < off['yaw'] < (0 - close)) or
-                 ((0 + close) < off['yaw'] < (180 - close))) and
-                    (((-180 + close) < off['pit'] < (0 - close)) or
-                     ((0 + close) < off['pit'] < (180 - close)))):
+            use_roll = ((((-180 + close) < off['yaw'] < (0 - close)) or
+                         ((0 + close) < off['yaw'] < (180 - close))) and
+                        (((-180 + close) < off['pit'] < (0 - close)) or
+                         ((0 + close) < off['pit'] < (180 - close))))
+            if not use_roll and self._roll_pitch_faster(off):
+                # Big sideways offset: yawing is slow on big ships (Type-9 5.5 deg/s, pitch 12-13 deg/s).
+                # Roll the target onto the pitch axis and pitch instead.
+                logger.debug(f"Compass align: roll + pitch is faster than yaw {off['yaw']:.0f} deg.")
+                use_roll = True
+            if use_roll:
 
                 # Increase the closeness as we are using the compass only
                 close = 8.0  # in degrees
@@ -1829,7 +1894,10 @@ class EDAutopilot:
                             self.overlay.overlay_remove_floating_text('compass_rpy')
                             self.overlay.overlay_paint()
 
-                        off = self.ship_control.roll_clockwise_anticlockwise(off['roll'], auto_tune=self.auto_tune_rpy, cur_deg=off['roll'])
+                        # Roll to the nearer of 12 or 6 o'clock (pitch up or down), max. 90 deg instead of up to 180
+                        roll = off['roll'] if abs(off['roll']) <= 90 else off['roll'] - math.copysign(180, off['roll'])
+                        off = self.ship_control.roll_clockwise_anticlockwise(roll, auto_tune=self.auto_tune_rpy,
+                                                                             cur_deg=roll)
                     else:
                         break
 
@@ -1895,6 +1963,20 @@ class EDAutopilot:
         self.ap_ckb('log+vce', 'Compass Align failed - exhausted all retries')
         return False
 
+    def _roll_pitch_faster(self, off) -> bool:
+        """ True if rolling the target onto the pitch axis and pitching is clearly faster than pitch + yaw. """
+        try:
+            yaw, pit, roll = abs(off['yaw']), abs(off['pit']), abs(off['roll'])
+            if yaw < 20 or yaw > 160:
+                return False
+            roll = roll if roll <= 90 else 180 - roll
+            rr, pr, yr = max(1.0, self.rollrate), max(1.0, self.pitchrate), max(0.5, self.yawrate)
+            t_yaw = pit / pr + yaw / yr
+            t_roll = roll / rr + math.hypot(yaw, pit) / pr + 1.0  # +1 s for the extra maneuver
+            return t_roll < t_yaw - 1.0
+        except Exception:
+            return False
+
     def _is_in_supercruise_or_space(self) -> bool:
         """Check if the ship is in supercruise or normal space using both journal state and status.json flags.
         The status.json flags update faster than the journal reader, so we check both to avoid race conditions.
@@ -1926,6 +2008,9 @@ class EDAutopilot:
         self.sun_avoid(scr_reg, scooping=False)
 
         self.set_throttle_50()
+        # Start the FSD charge now: it takes ~15 s and runs while we align. A charged FSD waits with
+        # 'please align ship with trajectory' until we point at the target, then jumps.
+        self._precharge_fsd()
         res = self.compass_align(scr_reg)
         # Quick calibrate the compass
         # if res:
@@ -1933,8 +2018,15 @@ class EDAutopilot:
 
         self.ap_ckb('log+vce', 'Target Align')
         for i in range(5):
+            if self._jump_started():
+                # The pre-charged FSD jumped as soon as we were aligned well enough for the game
+                logger.debug('mnvr_to_target: jump already started.')
+                return
             self.set_throttle_50()
             align_res = self.sc_target_align(scr_reg)
+            if self._jump_started():
+                logger.debug('mnvr_to_target: jump started during target align.')
+                return
             if align_res == ScTargetAlignReturn.Lost:
                 self.set_throttle_50()
                 compass_ok = self.compass_align(scr_reg)  # Compass Align
@@ -1955,6 +2047,41 @@ class EDAutopilot:
 
         logger.error('mnvr_to_target failed 5 times')
         raise Exception('mnvr_to_target failed 5 times')
+
+    def _jump_started(self) -> bool:
+        """ True when the hyperspace jump has started (pre-charged FSD, the game jumps once we are aligned). """
+        try:
+            return bool(self.status.get_flag(FlagsFsdJump)) or \
+                self.jn.ship_state()['status'] in ('starting_hyperspace', 'in_hyperspace')
+        except Exception:
+            return False
+
+    def _precharge_fsd(self) -> bool:
+        """ Starts the hyperspace charge before the alignment (config 'FSDChargeWhileAligning'). Only in supercruise,
+        with a route target, no cooldown/mass lock and not already charging. jump() does not press the key again
+        while the FSD is charging. """
+        if not self.config.get('FSDChargeWhileAligning', True):
+            return False
+        try:
+            if not self.status.get_flag(FlagsSupercruise) or not self.jn.ship_state()['target']:
+                return False
+            if (self.status.get_flag(FlagsFsdCharging) or self.status.get_flag(FlagsFsdJump) or
+                    self.status.get_flag(FlagsFsdMassLocked)):
+                return False
+            if self.status.get_flag(FlagsFsdCooldown):
+                # Cooldown after the last jump is short, wait a moment instead of giving up the time saving
+                if not self.status.wait_for_flag_off(FlagsFsdCooldown, timeout=4):
+                    return False
+            self.keys.send('HyperSuperCombination')
+            if self.status.wait_for_flag_on(FlagsFsdCharging, 3):
+                logger.debug('FSD charging while aligning.')
+                return True
+            logger.debug('FSD did not start charging (target obscured?), charging after the alignment.')
+        except EDAP_Interrupt:
+            raise
+        except Exception as e:
+            logger.warning(f"precharge FSD: {e}")
+        return False
 
     def sc_target_align(self, scr_reg) -> ScTargetAlignReturn:
         """ Align to the target, monitoring for disengage and obscured.
@@ -2201,6 +2328,11 @@ class EDAutopilot:
         """
         logger.debug('position')
         add_time = 12
+        no_scoop = not self.jn.ship_state().get('has_fuel_scoop')
+        if no_scoop and not self.config["ElwScannerEnable"]:
+            # Without fuel scoop the ship did not fly close to the star: a short pass is enough to get the next
+            # target out from behind the star (was 17 s per jump).
+            add_time = max(0.0, float(self.config.get('StarPassTimeNoScoop', 8)))
 
         self.set_throttle_100()
 
@@ -2209,7 +2341,7 @@ class EDAutopilot:
         # Need time to move past Sun, account for slowed ship if refueled
         pause_time = add_time
         if self.config["EnableRandomness"]:
-            pause_time = pause_time+random.randint(0, 3)
+            pause_time = pause_time + random.uniform(0, 3) * float(self.config.get('RandomnessScale', 1.0))
         # need time to get away from the Sun so heat will dissipate before we use FSD
         sleep(pause_time)
 
@@ -2218,7 +2350,7 @@ class EDAutopilot:
             if self.config["EnableRandomness"]:
                 sleep(random.randint(0, 3))
             sleep(3)
-        else:
+        elif not no_scoop:
             sleep(5)  # since not doing FSS, need to give a little more time to get away from Sun, for heat
 
         self.vce.say("Maneuvering")
@@ -2247,17 +2379,23 @@ class EDAutopilot:
             if not self._is_in_supercruise_or_space():
                 logger.error('Not ready to FSD jump. jump=err1')
                 raise Exception('not ready to jump')
-            sleep(0.5)
-            self.random_pause(1.5)
+            if not self.status.get_flag(FlagsFsdCharging):
+                sleep(0.5)
+                self.random_pause(1.5)
             logger.debug('jump= start fsd')
 
-            # Initiate FSD Jump
-            self.keys.send('HyperSuperCombination')
+            # Initiate FSD Jump. With 'FSDChargeWhileAligning' the FSD was already started during the alignment:
+            # pressing the key again would cancel the charge.
+            if self.status.get_flag(FlagsFsdCharging) or self.status.get_flag(FlagsFsdJump) or \
+                    self.jn.ship_state()['status'] == 'starting_hyperspace':
+                logger.debug('jump= FSD already charging (charged while aligning)')
+            else:
+                self.keys.send('HyperSuperCombination')
 
-            res = self.status.wait_for_flag_on(FlagsFsdCharging, 5)
-            if not res:
-                logger.error('FSD failed to charge.')
-                continue
+                res = self.status.wait_for_flag_on(FlagsFsdCharging, 5)
+                if not res:
+                    logger.error('FSD failed to charge.')
+                    continue
 
             res = self.status.wait_for_flag_on(FlagsFsdJump, 30)
             if not res:
@@ -2274,8 +2412,8 @@ class EDAutopilot:
 
             logger.debug('jump= speed 0')
             self.jump_cnt = self.jump_cnt+1
-            self.set_throttle_0(repeat=3)  # Let's be triply sure that we set speed to 0% :)
-            sleep(1)  # wait 1 sec after jump to allow graphics to stablize and accept inputs
+            self.set_throttle_0(repeat=2)  # two short presses (was a 3 s hold + 1 s pause)
+            sleep(0.5)  # allow graphics to stabilize and accept inputs
             logger.debug('jump=complete')
 
             # Start SCO monitoring ready when we drop back to SC.
@@ -2616,11 +2754,18 @@ class EDAutopilot:
         self.random_pause(1.5)
         self.set_throttle_100()
 
-        # While Mass Locked, keep boosting.
+        # While Mass Locked, keep boosting. Supercruise is engaged as soon as the mass lock is gone (checked every
+        # 0.25 s instead of 1 s). The first seconds are used to roll the next target onto the pitch axis.
+        if boost:
+            self.keys.send('UseBoostJuice')
+            if self.status.get_flag(FlagsFsdMassLocked) and not self.status.get_flag(FlagsSupercruise):
+                self._pre_roll_to_target()
+        last_boost = time.time()
         while self.status.get_flag(FlagsFsdMassLocked):
-            if boost:
+            if boost and time.time() - last_boost >= 1.3:
                 self.keys.send('UseBoostJuice')
-            sleep(1)
+                last_boost = time.time()
+            sleep(0.25)
 
         # Engage Supercruise
         self.keys.send('Supercruise')
@@ -2669,7 +2814,9 @@ class EDAutopilot:
             return False
 
         # if we are starting the waypoint docked at a station, we need to undock first
-        if self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
+        if getattr(self, '_launched_early', False):
+            self.finish_launch()
+        elif self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
             self.waypoint_undock_seq()
 
         # Ensure we are in supercruise
@@ -2692,7 +2839,9 @@ class EDAutopilot:
         #    return False
 
         # if we are starting the waypoint docked at a station, we need to undock first
-        if self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
+        if getattr(self, '_launched_early', False):
+            self.finish_launch()
+        elif self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
             self.waypoint_undock_seq()
 
         # Ensure we are in supercruise
@@ -3140,8 +3289,16 @@ class EDAutopilot:
                 last_progress = time.time()
                 continue
 
+            # Close to the destination (km/m, or < 50 Mm) the SCA drops us in a few seconds: no slow OCR any more,
+            # the drop is then detected at once (was up to 7 s late, log 2026-10-20 18:41).
+            near = False
+            if last_dist:
+                m_near = re.match(r'([\d.]+)(KM|MM|M)$', last_dist)
+                if m_near and (m_near.group(2) in ('KM', 'M') or float(m_near.group(1)) < 50):
+                    near = True
+
             # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': the SCA can not reach the target (behind a body)
-            if check_los and in_sc and (time.time() - last_los_time) >= ocr_interval:
+            if check_los and in_sc and not near and (time.time() - last_los_time) >= ocr_interval:
                 last_los_time = time.time()
                 no_los = self.sc_assist_no_los_ocr(scr_reg)
                 los_text = getattr(self, '_sca_last_los_text', '')
@@ -3164,7 +3321,7 @@ class EDAutopilot:
                     los_cnt = 0
 
             # Optional OCR check of the 'SUPERCRUISE ASSIST ACTIVE' HUD text
-            if check_ocr and in_sc and (time.time() - last_ocr_time) >= ocr_interval:
+            if check_ocr and in_sc and not near and (time.time() - last_ocr_time) >= ocr_interval:
                 last_ocr_time = time.time()
                 active = self.sc_assist_active_ocr(scr_reg)
                 if active is None:
@@ -3202,7 +3359,7 @@ class EDAutopilot:
                             check_ocr = False
 
             # Progress watchdog: distance to the target did not change -> the ship does not move
-            if (stall_time > 0 and in_sc and last_dist is not None and
+            if (stall_time > 0 and in_sc and not near and last_dist is not None and
                     (time.time() - last_progress) > stall_time):
                 stall_cnt += 1
                 last_progress = time.time()
@@ -3310,7 +3467,12 @@ class EDAutopilot:
             self.set_throttle_0()
             return
 
-        sleep(4)  # wait for the journal to catch up
+        # Wait for the journal only if the drop event is not there yet (was a fixed 4 s, plus 5 s in dock():
+        # the ship drifted 9 s after the drop before the approach started).
+        t0 = time.time()
+        while time.time() - t0 < 4 and (self.jn.ship_state()['SupercruiseDestinationDrop_type'] is None or
+                                        self.jn.ship_state()['status'] != 'in_space'):
+            sleep(0.25)
 
         # Check if this is a target we cannot dock at
         skip_docking = False
@@ -4008,6 +4170,14 @@ class EDAutopilot:
         except EDAP_Interrupt:
             logger.debug("EDAP_Interrupt caught in engine_loop idle")
 
+    def _throttle_hold(self) -> float:
+        """ Hold time of the throttle preset keys. Before, the 'repeat' argument was passed as hold time: every
+        throttle change held the key 1 s (3 s after each jump), ~8 s per jump cycle. """
+        try:
+            return max(0.05, float(self.config.get('ThrottleKeyHold', 0.25)))
+        except (TypeError, ValueError):
+            return 0.25
+
     def set_throttle_0(self, repeat=1):
         if self.status.get_flag(FlagsSupercruise):
             self.speed_demand = 'SCSpeed0'
@@ -4016,7 +4186,7 @@ class EDAutopilot:
             self.speed_demand = 'Speed0'
             self.ap_ckb('log', f"Setting throttle to 0%.")
 
-        self.keys.send('SetSpeedZero', repeat)
+        self.keys.send('SetSpeedZero', hold=self._throttle_hold(), repeat=max(1, int(repeat)))
 
     def set_throttle_50(self, repeat=1):
         if self.status.get_flag(FlagsSupercruise):
@@ -4026,7 +4196,7 @@ class EDAutopilot:
             self.speed_demand = 'Speed50'
             self.ap_ckb('log', f"Setting throttle to 50%.")
 
-        self.keys.send('SetSpeed50', repeat)
+        self.keys.send('SetSpeed50', hold=self._throttle_hold(), repeat=max(1, int(repeat)))
 
     def set_throttle_100(self, repeat=1):
         if self.status.get_flag(FlagsSupercruise):
@@ -4036,7 +4206,7 @@ class EDAutopilot:
             self.speed_demand = 'Speed100'
             self.ap_ckb('log', f"Setting throttle to 100%.")
 
-        self.keys.send('SetSpeed100', repeat)
+        self.keys.send('SetSpeed100', hold=self._throttle_hold(), repeat=max(1, int(repeat)))
 
 
 def delete_old_log_files():

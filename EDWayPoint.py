@@ -584,6 +584,7 @@ class EDWayPoint:
             return
 
         self.step = 0  # start at first waypoint
+        self.ap._launched_early = False
         self.ap_ckb('log', "Waypoint file: " + str(Path(self.filename).name))
         self.reset_stats()
 
@@ -668,6 +669,10 @@ class EDWayPoint:
                     # No need to target system
                     self.ap_ckb('log+vce', f"System already targeted.")
                 else:
+                    # Docked: start the launch first and plot the route while the docking computer flies out
+                    # (the galaxy map can be used during the auto launch, saves ~25 s per station).
+                    if self.ap.can_launch_early():
+                        self.ap.start_launch()
                     self.ap_ckb('log+vce', f"Targeting system {next_wp_system}.")
                     # Select destination in galaxy map based on name
                     # After a trade the ship is heavier/lighter: plot the route again (an old route may contain
@@ -778,11 +783,16 @@ class EDWayPoint:
                             self.ap.ap_ckb('log', f"No bookmark number configured for '{next_wp_station}'; defaulting "
                                                   f"to Nav Panel OCR to set station by name.")
                         # Locate the station by name in the in-game Nav Panel (left HUD) and lock onto it.
-                        res = self.ap.nav_panel.lock_destination(next_wp_station)
-                        if not res:
-                            self.ap_ckb('log+vce', f"Unable to set Nav Panel OCR bookmark.")
-                            _abort = True
-                            break
+                        # With the in-game Supercruise Assist this is not needed: activating the SCA selects the
+                        # station in the same Nav Panel list (it was searched twice, ~13 s each).
+                        if self.ap.jn.ship_state()['has_supercruise_assist']:
+                            logger.debug(f"Station '{next_wp_station}' is selected when the SC Assist is activated.")
+                        else:
+                            res = self.ap.nav_panel.lock_destination(next_wp_station)
+                            if not res:
+                                self.ap_ckb('log+vce', f"Unable to set Nav Panel OCR bookmark.")
+                                _abort = True
+                                break
 
                     else:
                         # No bookmark and no station name -- nothing to target.

@@ -271,8 +271,9 @@ class EDNavigationPanel:
         """ Shows the Nav Panel. Opens the Nav Panel if not already open.
         Returns True if successful, else False.
         """
-        # Is nav panel active?
-        active, active_tab_name = self.is_panel_active()
+        # Is nav panel active? Check once only: normally it is closed, waiting 3 s for the focus cost 3 s every
+        # time the panel was opened (docking request, station target, SC Assist).
+        active, active_tab_name = self.is_panel_active(focus_timeout=0)
         if active:
             # Store image
             image = self.screen.get_screen_full()
@@ -311,12 +312,17 @@ class EDNavigationPanel:
         if self.status_parser.get_gui_focus() == GuiFocusExternalPanel:
             self.ap.ship_control.goto_cockpit_view()
 
-    def is_panel_active(self) -> (bool, str):
+    def is_panel_active(self, focus_timeout: float = 3) -> (bool, str):
         """ Determine if the Nav Panel is open and if so, which tab is active.
             Returns True if active, False if not and also the string of the tab name.
+        @param focus_timeout: Time to wait for the panel focus. 0 = check once (panel is not expected to be open).
         """
         # Check if nav panel is open
-        if not self.status_parser.wait_for_gui_focus(GuiFocusExternalPanel, 3):
+        if focus_timeout <= 0:
+            focused = self.status_parser.get_gui_focus() == GuiFocusExternalPanel
+        else:
+            focused = self.status_parser.wait_for_gui_focus(GuiFocusExternalPanel, focus_timeout)
+        if not focused:
             logger.debug("is_nav_panel_active: right panel not focused")
             return False, ""
 
@@ -533,7 +539,7 @@ class EDNavigationPanel:
         # On the CONTACT TAB, go to top selection, do this 4 seconds to ensure at top
         # then go right, which will be "REQUEST DOCKING" and select it
         self.keys.send("UI_Down")  # go down
-        self.keys.send('UI_Up', hold=2)  # got to top row
+        self.keys.send('UI_Up', hold=1.0)  # got to top row (the contacts list is short)
         self.keys.send('UI_Right')
         self.keys.send('UI_Select')
         sleep(0.3)

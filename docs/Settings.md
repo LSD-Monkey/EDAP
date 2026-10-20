@@ -58,7 +58,9 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 
 | Setting | AP.json key | Default | Description |
 |---|---|---|---|
-| Approach before docking request (s) | `DockApproachTime` | `20` | After the drop: seconds at 100 % throttle towards the station before docking is requested (then 50 %). Range 0 - 120. |
+| Max. approach at 100 % (s) | `DockApproachTime` | `20` | Docking is requested right after the drop and again every few seconds while 'too far away'. After this time at 100 % the throttle goes to 50 % (speed limit in the no-fire zone). Range 0 - 120. |
+| Plot the route while undocking | `PlotRouteWhileUndocking` | `True` | Start the launch first and plot the route in the galaxy map while the docking computer flies out of the station (saves ~25 s per station). |
+| Roll to the target while mass locked | `PreRollAfterUndock` | `True` | While boosting away from the station: roll so the next target is straight above or below. Then only a pitch (fast) is needed in supercruise. |
 | Docking request attempts | `DockingRetries` | `30` | How often docking is requested (at least 8 are used). Range 1 - 60. |
 | Wait for auto-dock (s) | `WaitForAutoDockTimer` | `240` | After docking was granted: max. time for the docking computer to land. Range 30 - 900. |
 | Fleet carrier departure (s) | `FCDepartureTime` | `5.0` | Extra time to fly away from a fleet carrier before entering supercruise. Range 0 - 60. |
@@ -73,6 +75,8 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 | Jump attempts | `JumpTries` | `3` | How many attempts to jump. Range 1 - 20. |
 | Sun brightness threshold | `SunBrightThreshold` | `125` | Brightness (0-255) above which the screen centre is seen as a star (sun avoidance). Higher = less sensitive. Range 0 - 255. |
 | Galaxy map select delay (s) | `GalMap_SystemSelectDelay` | `0.5` | Wait in the galaxy map before the system is selected. Increase on slow PCs. Range 0 - 5. |
+| Charge the FSD while aligning | `FSDChargeWhileAligning` | `True` | Start the FSD charge (~15 s) before the alignment to the next system. The charged FSD waits until the ship points at the target, then jumps. |
+| Fly past the star, no scoop (s) | `StarPassTimeNoScoop` | `8` | After a jump: seconds at 100 % past the arrival star for ships without fuel scoop (with scoop: 17 s). Increase if the next target is often behind the star. Range 0 - 30. |
 
 ## Fuel
 
@@ -87,11 +91,12 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 | Setting | AP.json key | Default | Description |
 |---|---|---|---|
 | Randomise timing | `EnableRandomness` | `False` | Varies key hold times, delays and adds short random pauses (so actions do not have a fixed rhythm). |
-| Random pause factor | `RandomnessScale` | `1.0` | Scales the random pauses: 0.5 = half as long, 2 = twice as long. Range 0 - 5. |
+| Random pause factor | `RandomnessScale` | `0.5` | Scales the random pauses: 0.5 = half as long, 2 = twice as long. Range 0 - 5. |
 | Activate Elite before each key | `ActivateEliteEachKey` | `False` | Brings the Elite window to the front before every key. Only needed if keys get lost. |
 | Key hold time (s) | `Key_DefHoldTime` | `0.2` | Default time a key is held down. Range 0.01 - 1. |
 | Delay between repeats (s) | `Key_RepeatDelay` | `0.1` | Pause between repeated key presses. Range 0.01 - 1. |
 | Modifier key delay (s) | `Key_ModDelay` | `0.01` | Delay so a modifier (Shift, Ctrl, ...) is detected before/after the key. Range 0 - 0.5. |
+| Throttle key hold (s) | `ThrottleKeyHold` | `0.25` | Hold time of the throttle keys (0 %, 50 %, 100 %). Was 1 s (3 s after each jump), ~8 s per jump. Range 0.05 - 1.5. |
 
 ## Overlay
 

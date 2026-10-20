@@ -1,3 +1,34 @@
+# 10/20/2026 v1.9.4 b33 - faster trading (analysis of the 18:14 recording)
+- FIX settings: the mouse wheel over a dropdown or number field changed the value while scrolling ('Language'
+  became 'ru' at 18:09). Now the wheel only scrolls, everywhere in the GUI.
+- FIX market: the commodity name region started too far right ('TICAPPLIANCES', 'SILVER' not readable): 0.70 ->
+  0.678.
+- Throttle keys: the 'repeat' argument was used as hold time, every throttle change held the key 1 s (3 s after
+  each jump). Now 0.25 s ('ThrottleKeyHold'), ~8 s per jump.
+- FSD charge during the alignment ('FSDChargeWhileAligning'): the charge (~15 s) starts after the star avoidance,
+  the charged FSD waits until the ship points at the target. jump() does not press the key again.
+- Without fuel scoop only 8 s past the star after a jump ('StarPassTimeNoScoop', was 17 s). After the jump 2 short
+  throttle presses + 0.5 s instead of 3 s hold + 1 s.
+- Compass align: big sideways offsets are turned with roll + pitch when that is faster than yaw (Type-9 yaw
+  5.5 deg/s, pitch 12-13 deg/s); rolls go to the nearer of 12/6 o'clock (max. 90 deg).
+- Station target: with the in-game SC Assist the station is searched only once in the Nav Panel (was twice).
+- Nav Panel: no 3 s wait for the focus when the panel is closed (docking request, SC Assist activation).
+- SC Assist: no OCR in the last seconds before the drop (km or < 50 Mm), the drop is detected at once; no fixed
+  4 s + 5 s wait after the drop.
+- Docking: request at once after the drop, again every 3 s while 'too far away'; 'DockApproachTime' is the max.
+  time at 100 % before 50 %. Contacts list top: 1 s hold instead of 2 s.
+- Market: the highlighted commodity is read first; known position -> no 5 s 'hold up'; items far down the list
+  are reached from the bottom.
+- Waypoint Assist: after the trade the launch starts first and the route is plotted in the galaxy map while the
+  docking computer flies out ('PlotRouteWhileUndocking').
+- After the launch: while mass locked the next target is rolled onto the pitch axis ('PreRollAfterUndock');
+  mass lock checked every 0.25 s.
+- Galaxy map: shorter waits and key presses (~6 s).
+- Random pause factor default 0.5.
+- Trade tab: all sellers x all buyers of every commodity are paired (numpy) instead of only the 60 cheapest/most
+  expensive of the area; round trips may fly back empty; 80 commodities by default; times per jump and per station
+  are learned from your journals for the profit per hour.
+
 # 10/20/2026 v1.9.4 b32
 - Trade tab reworked like the Inara trade route search: searches the area around a reference system (your
   location) instead of only from the current station. Settings: max. distance to the start, max. distance between
