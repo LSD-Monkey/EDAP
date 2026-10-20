@@ -1,3 +1,10 @@
+# 10/20/2026 v1.9.4 b34
+- FIX 'Waypoint Assist stopped: main menu, game closed or not in the ship' right after starting a trade route
+  (log 2026-10-20 19:44): EDAP was started before the game. The journal reader opened the new journal of the game,
+  but kept the name of the old one (current_log). The game state check then read the old journal, which ends with
+  'Shutdown'. In addition the new journal was opened and read from the start again every second ('Opening new
+  Journal' in the log). The reader now remembers the new journal; the game state check always reads the newest one.
+
 # 10/20/2026 v1.9.4 b33 - faster trading (analysis of the 18:14 recording)
 - FIX settings: the mouse wheel over a dropdown or number field changed the value while scrolling ('Language'
   became 'ru' at 18:09). Now the wheel only scrolls, everywhere in the GUI.

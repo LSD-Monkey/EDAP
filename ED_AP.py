@@ -3759,7 +3759,9 @@ class EDAutopilot:
         """ Last game state in the current journal ('in_game', 'main_menu', 'shutdown'). Reads only the end of the
         file with its own file handle (the journal reader of the engine thread must not be used from here). """
         try:
-            path = self.jn.current_log
+            # The newest journal of the game (not the one EDAP opened at the start: the game may have been started or
+            # restarted after EDAP and writes a new journal then)
+            path = self.jn.get_latest_log() or self.jn.current_log
             with open(path, 'rb') as f:
                 f.seek(0, os.SEEK_END)
                 size = f.tell()

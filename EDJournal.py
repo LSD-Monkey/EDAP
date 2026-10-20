@@ -274,7 +274,7 @@ class EDJournal:
     def get_latest_log(self, path_logs=None):
         """Returns the full path of the latest (most recent) elite log file (journal) from specified path"""
         if not path_logs:
-            path_logs = get_path(FOLDERID.SavedGames, UserHandle.current) + "\Frontier Developments\Elite Dangerous"
+            path_logs = get_path(FOLDERID.SavedGames, UserHandle.current) + r"\Frontier Developments\Elite Dangerous"
         list_of_logs = [join(path_logs, f) for f in listdir(path_logs) if isfile(join(path_logs, f)) and f.startswith('Journal.')]
         if not list_of_logs:
             return None
@@ -290,6 +290,10 @@ class EDJournal:
 
         # open the latest journal
         self.log_file = open(log_name, encoding="utf-8")
+        # Remember it. Before, current_log kept the journal of the EDAP start: when the game was started after EDAP
+        # (or wrote a new journal), the new file was opened and read from the start again on every call
+        # ('Opening new Journal' every second) and the game state was taken from the old journal ('Shutdown').
+        self.current_log = log_name
         self.last_mod_time = None
 
     def parse_line(self, log):
