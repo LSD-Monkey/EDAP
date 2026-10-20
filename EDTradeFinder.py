@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 """
-Trade route finder (Trade tab).
+Trade route finder (Trade tab), similar to the trade route search of Inara.
 
-Finds round trips A -> B -> A from a start station A: buy at A, sell at B, buy at B, sell at A. Market data comes from
- - the local Market.json if we are docked at A (exact, current prices),
- - the Ardent Insight API (https://api.ardent-insight.com, EDDN market data) for everything else.
+Searches the area around a reference system (usually where the ship is) for the most profitable trades:
+ - one way: buy commodity X at station A, sell it at station B,
+ - round trips: A -> B with X and B -> A with Y (repeated by Waypoint Assist).
 
-Search:
- 1. Market of A: exports (we can buy, stock > 0) and imports (we can sell).
- 2. For each export of A: the best nearby importers ('nearby/imports', within the max. distance).
- 3. The best stations B (outbound profit) get their market loaded: best return commodity B -> A.
- 4. Every round trip gets a profit per trip and an estimated profit per hour (jumps, supercruise, docking).
-
-The result can be written as a waypoint file (A, B, REPEAT) for Waypoint Assist.
+Market data: Ardent Insight API (https://api.ardent-insight.com, EDDN data uploaded by players).
+ 1. Commodity report: the commodities worth checking (highest price level, not rare/salvage).
+ 2. For every commodity: sellers ('nearby/exports') and buyers ('nearby/imports') around the reference system.
+ 3. Every seller/buyer pair within the max. distance between the stations is a trade leg.
+ 4. Legs A->B and B->A are combined to round trips. Profit per trip and estimated profit per hour.
 """
 
 import json
@@ -29,12 +27,17 @@ from EDlogger import logger
 ARDENT_BASE = "https://api.ardent-insight.com/v2"
 USER_AGENT = "EDAP-TradeFinder/1.0 (github.com/LSD-Monkey/EDAP)"
 
-# Station types that can not be used: carriers, megaships, construction sites, points of interest
-EXCLUDED_TYPES = {'fleetcarrier', 'megaship', 'gameplaypoi', 'planetaryconstructiondepot',
-                  'spaceconstructiondepot', 'colonisationship', 'strongholdcarrier'}
+# Station types that can never be used (construction sites, points of interest)
+EXCLUDED_TYPES = {'gameplaypoi', 'planetaryconstructiondepot', 'spaceconstructiondepot', 'colonisationship'}
+CARRIER_TYPES = {'fleetcarrier', 'strongholdcarrier', 'squadroncarrier'}
+MEGASHIP_TYPES = {'megaship'}
+SETTLEMENT_TYPES = {'onfootsettlement'}
 # Station types on a planet surface (glide + planetary landing)
-PLANETARY_TYPES = {'crateroutpost', 'craterport', 'onfootsettlement', 'surfacestation', 'planetaryoutpost',
-                   'planetaryport', 'surfaceport'}
+PLANETARY_TYPES = {'crateroutpost', 'craterport', 'surfacestation', 'planetaryoutpost', 'planetaryport',
+                   'surfaceport'}
+# Commodity categories that are not traded (missions, salvage)
+SKIP_SYMBOL_PARTS = ('thargoid', 'guardian', 'titan', 'mollusc', 'pod', 'escapepod', 'relic', 'artefact',
+                     'blackbox', 'datacore', 'samples', 'drones', 'occupiedcryopod', 'hostage', 'prisoner')
 # Station types that always have large pads
 LARGE_PAD_TYPES = {'coriolis', 'orbis', 'ocellus', 'asteroidbase', 'bernal', 'dodec', 'craterport'}
 
@@ -118,7 +121,7 @@ def age_hours(updated_at) -> float | None:
 class ArdentClient:
     """ Minimal client of the Ardent Insight REST API with a small cache. """
 
-    def __init__(self, timeout: float = 20.0, cache_secs: float = 600.0):
+    def __init__(self, timeout: float = 30.0, cache_secs: float = 600.0):
         self.timeout = timeout
         self.cache_secs = cache_secs
         self._cache: dict[str, tuple[float, object]] = {}
@@ -154,234 +157,245 @@ class ArdentClient:
     def q(name: str) -> str:
         return urllib.parse.quote(name, safe='')
 
-    def station_market(self, system: str, station: str):
-        return self.get(f"/system/name/{self.q(system)}/market/name/{self.q(station)}/commodities")
-
-    def nearby_imports(self, system: str, symbol: str, max_distance: int, min_volume: int, max_days: int):
-        return self.get(f"/system/name/{self.q(system)}/commodity/name/{self.q(symbol)}/nearby/imports",
-                        {'maxDistance': int(max_distance), 'minVolume': int(min_volume), 'fleetCarriers': 'false',
-                         'maxDaysAgo': max(1, int(math.ceil(max_days)))})
+    def commodities(self):
+        return self.get("/commodities")
 
     def system(self, system: str):
         return self.get(f"/system/name/{self.q(system)}")
+
+    def nearby(self, kind: str, system: str, symbol: str, max_distance: float, min_volume: int, max_days: float,
+               carriers: bool):
+        """ kind 'exports' (where to buy) or 'imports' (where to sell). """
+        return self.get(f"/system/name/{self.q(system)}/commodity/name/{self.q(symbol)}/nearby/{kind}",
+                        {'maxDistance': int(min(500, max_distance)), 'minVolume': int(max(1, min_volume)),
+                         'fleetCarriers': None if carriers else 'false',
+                         'maxDaysAgo': max(1, int(math.ceil(max_days)))})
+
+
+def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, arrival_b: float,
+                       round_trip: bool = True, secs_per_jump: float = 110.0,
+                       secs_station: float = 240.0) -> tuple[int, float]:
+    """ Jumps per way and the estimated time in seconds (one way or round trip). Measured in the EDAP logs:
+    ~110 s per jump with alignment and star avoidance, ~4 min per station (approach, docking, trade, undocking),
+    supercruise of 76 Ls ~2 min. """
+    # The plotted route is not a straight line (2026-10-20: 93 ly direct, 8 jumps of max. 13.5 ly)
+    jumps = max(1, int(math.ceil(distance_ly * 1.12 / max(1.0, jump_range))))
+
+    def sc(ls):
+        return 60.0 + 8.0 * math.sqrt(max(0.0, float(ls or 0)))
+
+    if round_trip:
+        total = 2 * jumps * secs_per_jump + sc(arrival_a) + sc(arrival_b) + 2 * secs_station
+    else:
+        total = jumps * secs_per_jump + sc(arrival_b) + 2 * secs_station
+    return jumps, total
 
 
 class TradeFinder:
     def __init__(self, client: ArdentClient | None = None, progress=None):
         self.client = client or ArdentClient()
         self.progress = progress or (lambda msg: None)
+        self.rejected: dict[str, int] = {}
 
     # ------------------------------------------------------------------------------------------------------------
-    @staticmethod
-    def market_from_local(market_json: dict) -> dict:
-        """ Market.json -> {symbol: {...}} """
-        out = {}
-        for it in market_json.get('Items', []):
-            sym = _symbol_from_market_name(it.get('Name', ''))
-            if not sym:
-                continue
-            out[sym] = {
-                'name': it.get('Name_Localised') or display_name(sym),
-                'buy': int(it.get('BuyPrice', 0) or 0), 'sell': int(it.get('SellPrice', 0) or 0),
-                'stock': int(it.get('Stock', 0) or 0), 'demand': int(it.get('Demand', 0) or 0),
-                'can_buy': (it.get('Stock', 0) or 0) > 0 and (it.get('Producer', True) or it.get('Rare', False))
-                           and not it.get('Rare', False),
-                'can_sell': bool(it.get('Consumer') or (it.get('Demand', 0) or 0) > 0),
-                'updated': market_json.get('timestamp'),
-            }
-        return out
-
-    @staticmethod
-    def market_from_ardent(rows: list) -> dict:
-        out = {}
-        for r in rows or []:
-            sym = _norm(r.get('commodityName', ''))
-            if not sym:
-                continue
-            stock = int(r.get('stock') or 0)
-            demand = int(r.get('demand') or 0)
-            buy = int(r.get('buyPrice') or 0)
-            sell = int(r.get('sellPrice') or 0)
-            out[sym] = {'name': display_name(sym), 'buy': buy, 'sell': sell, 'stock': stock, 'demand': demand,
-                        'can_buy': stock > 0 and buy > 0,
-                        'can_sell': sell > 0 and (demand > 0 or (r.get('demandBracket') or 0) > 0),
-                        'updated': r.get('updatedAt')}
-        return out
-
-    @staticmethod
-    def station_reject_reason(row: dict, min_pad: int, max_arrival_ls: float, include_planetary: bool) -> str:
-        """ '' if the station can be used, else the reason. """
+    def station_reject_reason(self, row: dict, f: dict) -> str:
+        """ '' if the station can be used with the filters f, else the reason. """
         stype = _norm(row.get('stationType') or '')
-        name = (row.get('stationName') or '')
-        if stype in EXCLUDED_TYPES or 'colonisation' in name.lower() or 'construction site' in name.lower():
-            return 'carrier/megaship/construction'
-        if stype in PLANETARY_TYPES and not include_planetary:
+        name = (row.get('stationName') or '').lower()
+        if stype in EXCLUDED_TYPES or 'colonisation' in name or 'construction site' in name:
+            return 'construction site'
+        if stype in CARRIER_TYPES and not f['carriers']:
+            return 'fleet carrier'
+        if stype in MEGASHIP_TYPES and not f['megaships']:
+            return 'megaship'
+        if stype in SETTLEMENT_TYPES and not f['settlements']:
+            return 'settlement'
+        if stype in PLANETARY_TYPES and not f['planetary']:
             return 'planetary'
         pad = pad_size(row.get('maxLandingPadSize'), stype)
+        if stype in CARRIER_TYPES and pad is None:
+            pad = 3
         if pad is None:
-            return 'pad size unknown'
-        if pad < min_pad:
+            return 'pad size unknown' if f['min_pad'] > 1 else ''
+        if pad < f['min_pad']:
             return 'pad too small'
         dta = row.get('distanceToArrival')
-        if dta is not None and max_arrival_ls and float(dta) > max_arrival_ls:
+        if dta is not None and f['max_arrival_ls'] and float(dta) > f['max_arrival_ls']:
             return 'too far from the star'
+        age = age_hours(row.get('updatedAt'))
+        if age is not None and age > f['max_age_hours']:
+            return 'price too old'
         return ''
 
-    @classmethod
-    def station_ok(cls, row: dict, min_pad: int, max_arrival_ls: float, include_planetary: bool) -> bool:
-        return cls.station_reject_reason(row, min_pad, max_arrival_ls, include_planetary) == ''
+    def _ok(self, row: dict, f: dict) -> bool:
+        reason = self.station_reject_reason(row, f)
+        if reason:
+            self.rejected[reason] = self.rejected.get(reason, 0) + 1
+            return False
+        return True
+
+    def commodity_list(self, count: int) -> list[str]:
+        """ The commodities worth checking: highest average price level with supply and demand. """
+        report = self.client.commodities() or []
+        rows = []
+        for c in report:
+            sym = _norm(c.get('commodityName', ''))
+            if not sym or any(p in sym for p in SKIP_SYMBOL_PARTS):
+                continue
+            if (c.get('totalStock') or 0) <= 0 or (c.get('totalDemand') or 0) <= 0:
+                continue
+            spread = (c.get('avgSellPrice') or 0) - (c.get('minBuyPrice') or 0)
+            rows.append((max(spread, 0) + 0.2 * (c.get('avgSellPrice') or 0), sym))
+        rows.sort(reverse=True)
+        return [sym for _, sym in rows[:count]]
 
     @staticmethod
-    def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, arrival_b: float,
-                           secs_per_jump: float = 110.0, secs_station: float = 240.0) -> tuple[int, float]:
-        """ Jumps per way and the estimated time of a round trip in seconds (measured in the logs: ~110 s per jump
-        with alignment and star avoidance, ~4 min per station for approach, docking, trade and undocking, a
-        supercruise of 76 Ls took ~2 min). """
-        # The plotted route is not a straight line (2026-10-20: 93 ly direct, 8 jumps of max. 13.5 ly)
-        jumps = max(1, int(math.ceil(distance_ly * 1.12 / max(1.0, jump_range))))
+    def _key(row: dict) -> str:
+        return str(row.get('marketId') or f"{row.get('systemName')}|{row.get('stationName')}")
 
-        def sc(ls):
-            return 60.0 + 8.0 * math.sqrt(max(0.0, float(ls or 0)))
+    @staticmethod
+    def _station(row: dict) -> dict:
+        return {'system': row.get('systemName'), 'station': row.get('stationName'),
+                'station_type': row.get('stationType'), 'arrival_ls': float(row.get('distanceToArrival') or 0),
+                'pad': pad_size(row.get('maxLandingPadSize'), row.get('stationType') or ''),
+                'dist_ref': float(row.get('distance') or 0),
+                'pos': (row.get('systemX'), row.get('systemY'), row.get('systemZ'))}
 
-        total = 2 * jumps * secs_per_jump + sc(arrival_a) + sc(arrival_b) + 2 * secs_station
-        return jumps, total
+    @staticmethod
+    def _dist(a: dict, b: dict) -> float | None:
+        pa, pb = a['pos'], b['pos']
+        if None in pa or None in pb:
+            return None
+        return math.dist(pa, pb)
 
     # ------------------------------------------------------------------------------------------------------------
-    def find_round_trips(self, start_system: str, start_station: str, cargo: int, min_pad: int = 3,
-                         max_distance: float = 60, max_arrival_ls: float = 5000, max_age_hours: float = 24,
-                         include_planetary: bool = False, jump_range: float = 15.0, local_market: dict | None = None,
-                         max_exports: int = 20, max_destinations: int = 15, secs_per_jump: float = 110.0) -> list[dict]:
+    def find_routes(self, ref_system: str, cargo: int, max_start_distance: float = 50, max_hop_distance: float = 50,
+                    min_volume: int = 0, max_arrival_ls: float = 5000, max_age_hours: float = 24, min_pad: int = 3,
+                    carriers: bool = False, megaships: bool = False, planetary: bool = False,
+                    settlements: bool = False, round_trips: bool = True, commodity_count: int = 50,
+                    jump_range: float = 15.0, secs_per_jump: float = 110.0, top_per_side: int = 60,
+                    max_results: int = 100) -> list[dict]:
         cargo = max(1, int(cargo))
+        min_volume = int(min_volume) if min_volume and min_volume > 0 else cargo
+        f = dict(carriers=carriers, megaships=megaships, planetary=planetary, settlements=settlements,
+                 min_pad=min_pad, max_arrival_ls=max_arrival_ls, max_age_hours=max_age_hours)
+        self.rejected = {}
+        # Stations of a round trip are both start stations, so both need to be within the start distance plus
+        # the distance between the stations (the closer one becomes the start).
+        radius = min(500.0, max_start_distance + max_hop_distance)
         max_days = max(1.0, max_age_hours / 24.0)
 
-        # 1. Market of the start station
-        if local_market is not None:
-            mkt_a = self.market_from_local(local_market)
-            self.progress(f"Start market from Market.json ({len(mkt_a)} commodities).")
-        else:
-            self.progress(f"Loading the market of {start_station}...")
-            rows = self.client.station_market(start_system, start_station)
-            if not rows:
-                raise RuntimeError(f"No market data for '{start_station}' in '{start_system}' (Ardent).")
-            mkt_a = self.market_from_ardent(rows)
-        arrival_a = 0.0
-        sys_a = None
-        try:
-            rows = self.client.station_market(start_system, start_station) if local_market is not None else rows
-            if rows:
-                arrival_a = float(rows[0].get('distanceToArrival') or 0)
-                sys_a = (rows[0].get('systemX'), rows[0].get('systemY'), rows[0].get('systemZ'))
-        except Exception as e:
-            logger.debug(f"trade finder: start station details: {e}")
+        self.progress("Loading the commodity list...")
+        symbols = self.commodity_list(commodity_count)
+        if not symbols:
+            raise RuntimeError("Could not load the commodity list (Ardent API).")
+        self.progress(f"Searching {len(symbols)} commodities within {radius:g} ly of {ref_system}...")
 
-        local_names = {sym: v['name'] for sym, v in mkt_a.items()}
-        exports = [(sym, v) for sym, v in mkt_a.items() if v['can_buy'] and v['buy'] > 0]
-        # Most promising first: big stock, cheap compared to the price elsewhere is unknown here -> stock
-        exports.sort(key=lambda kv: kv[1]['stock'], reverse=True)
-        exports = exports[:max_exports]
-        if not exports:
-            raise RuntimeError(f"'{start_station}' sells nothing (no stock).")
-        self.progress(f"{len(exports)} commodities to buy at {start_station}. Searching buyers within "
-                      f"{max_distance:g} ly...")
-
-        # 2. Best buyers for every export
-        def buyers(item):
-            sym, v = item
+        def load(sym):
             try:
-                rows = self.client.nearby_imports(start_system, sym, max_distance, min(cargo, 1000), max_days) or []
+                ex = self.client.nearby('exports', ref_system, sym, radius, min_volume, max_days, carriers) or []
+                im = self.client.nearby('imports', ref_system, sym, radius, min_volume, max_days, carriers) or []
             except Exception as e:
-                logger.warning(f"trade finder: imports of {sym}: {e}")
-                return sym, v, []
-            return sym, v, rows
+                logger.warning(f"trade finder: {sym}: {e}")
+                return sym, [], []
+            return sym, ex, im
 
-        candidates: dict[str, dict] = {}  # key system|station -> best outbound
-        rejected: dict[str, int] = {}
+        stations: dict[str, dict] = {}
+        legs: dict[tuple[str, str], dict] = {}  # (seller, buyer) -> best leg
+        done = 0
         with ThreadPoolExecutor(max_workers=4) as pool:
-            for done, (sym, v, rows) in enumerate(pool.map(buyers, exports), 1):
-                for r in rows:
-                    reason = self.station_reject_reason(r, min_pad, max_arrival_ls, include_planetary)
-                    if reason:
-                        rejected[reason] = rejected.get(reason, 0) + 1
-                        continue
-                    age = age_hours(r.get('updatedAt'))
-                    if age is not None and age > max_age_hours:
-                        continue
-                    profit = int(r.get('sellPrice') or 0) - v['buy']
-                    if profit <= 0:
-                        continue
-                    demand = int(r.get('demand') or 0)
-                    amount = min(cargo, v['stock'], demand if demand > 0 else cargo)
-                    if amount <= 0:
-                        continue
-                    key = f"{r.get('systemName')}|{r.get('stationName')}"
-                    total = profit * amount
-                    if key not in candidates or total > candidates[key]['out_total']:
-                        candidates[key] = {
-                            'system': r.get('systemName'), 'station': r.get('stationName'),
-                            'station_type': r.get('stationType'), 'arrival_ls': float(r.get('distanceToArrival') or 0),
-                            'pad': pad_size(r.get('maxLandingPadSize'), r.get('stationType') or ''),
-                            'distance': float(r.get('distance') or 0),
-                            'out_symbol': sym, 'out_name': v['name'], 'out_buy': v['buy'],
-                            'out_sell': int(r.get('sellPrice') or 0), 'out_profit': profit, 'out_amount': amount,
-                            'out_total': total, 'out_age_h': age,
-                        }
-                self.progress(f"Buyers searched: {done}/{len(exports)} commodities, {len(candidates)} stations.")
+            for sym, ex, im in pool.map(load, symbols):
+                done += 1
+                sellers = [r for r in ex if (r.get('buyPrice') or 0) > 0 and self._ok(r, f)]
+                buyers = [r for r in im if (r.get('sellPrice') or 0) > 0 and self._ok(r, f)]
+                sellers.sort(key=lambda r: r.get('buyPrice') or 0)
+                buyers.sort(key=lambda r: r.get('sellPrice') or 0, reverse=True)
+                sellers, buyers = sellers[:top_per_side], buyers[:top_per_side]
+                name = display_name(sym)
+                for s_row in sellers:
+                    ks = self._key(s_row)
+                    st_s = stations.setdefault(ks, self._station(s_row))
+                    for b_row in buyers:
+                        profit = int(b_row.get('sellPrice') or 0) - int(s_row.get('buyPrice') or 0)
+                        if profit <= 0:
+                            break  # buyers are sorted by price, the rest is worse
+                        kb = self._key(b_row)
+                        if kb == ks:
+                            continue
+                        st_b = stations.setdefault(kb, self._station(b_row))
+                        d = self._dist(st_s, st_b)
+                        if d is None or d > max_hop_distance:
+                            continue
+                        stock = int(s_row.get('stock') or 0)
+                        demand = int(b_row.get('demand') or 0)
+                        amount = min(cargo, stock if stock > 0 else cargo, demand if demand > 0 else cargo)
+                        total = amount * profit
+                        leg = legs.get((ks, kb))
+                        if leg is None or total > leg['total']:
+                            legs[(ks, kb)] = {
+                                'symbol': sym, 'name': name, 'buy': int(s_row.get('buyPrice') or 0),
+                                'sell': int(b_row.get('sellPrice') or 0), 'profit': profit, 'amount': amount,
+                                'total': total, 'distance': d,
+                                'age_h': max([a for a in (age_hours(s_row.get('updatedAt')),
+                                                          age_hours(b_row.get('updatedAt'))) if a is not None],
+                                             default=None),
+                                'supply': stock, 'demand': demand,
+                            }
+                self.progress(f"Commodities checked: {done}/{len(symbols)}, {len(legs)} trades found.")
 
-        if rejected:
-            logger.info("Trade finder: stations skipped: " + ", ".join(f"{k} {v}" for k, v in rejected.items()))
-        if not candidates:
-            self.progress("No buyer found. Skipped: " + ", ".join(f"{k} {v}" for k, v in rejected.items()))
-            return []
-
-        # 3. Return trip for the best destinations
-        best = sorted(candidates.values(), key=lambda c: c['out_total'], reverse=True)[:max_destinations]
-        self.progress(f"Loading the markets of the best {len(best)} destinations for the return trip...")
-
-        def return_trip(c):
-            try:
-                rows = self.client.station_market(c['system'], c['station']) or []
-            except Exception as e:
-                logger.warning(f"trade finder: market of {c['station']}: {e}")
-                rows = []
-            return c, self.market_from_ardent(rows)
+        if self.rejected:
+            logger.info("Trade finder: stations skipped: " +
+                        ", ".join(f"{k} {v}" for k, v in sorted(self.rejected.items())))
 
         routes = []
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            for c, mkt_b in pool.map(return_trip, best):
-                back = None
-                for sym, vb in mkt_b.items():
-                    va = mkt_a.get(sym)
-                    if not vb['can_buy'] or not va or not va['can_sell']:
-                        continue
-                    age = age_hours(vb.get('updated'))
-                    if age is not None and age > max_age_hours:
-                        continue
-                    profit = va['sell'] - vb['buy']
-                    if profit <= 0:
-                        continue
-                    amount = min(cargo, vb['stock'], va['demand'] if va['demand'] > 0 else cargo)
-                    if amount <= 0:
-                        continue
-                    if back is None or profit * amount > back['back_total']:
-                        back = {'back_symbol': sym, 'back_name': display_name(sym, local_names),
-                                'back_buy': vb['buy'], 'back_sell': va['sell'], 'back_profit': profit,
-                                'back_amount': amount, 'back_total': profit * amount, 'back_age_h': age}
-                route = dict(c)
-                route.update(back or {'back_symbol': None, 'back_name': '', 'back_buy': 0, 'back_sell': 0,
-                                      'back_profit': 0, 'back_amount': 0, 'back_total': 0, 'back_age_h': None})
-                jumps, secs = self.estimate_trip_secs(c['distance'], jump_range, arrival_a, c['arrival_ls'],
-                                                      secs_per_jump=secs_per_jump)
-                route['jumps'] = jumps
-                route['trip_secs'] = secs
-                route['profit_trip'] = route['out_total'] + route['back_total']
-                route['profit_hour'] = route['profit_trip'] * 3600.0 / secs
-                route['start_system'] = start_system
-                route['start_station'] = start_station
-                route['capital_needed'] = max(route['out_buy'] * route['out_amount'],
-                                              route['back_buy'] * route['back_amount'])
-                routes.append(route)
-        self.progress(f"{len(routes)} round trips found ({self.client.requests} requests).")
-        return routes
+        if round_trips:
+            seen = set()
+            for (ka, kb), out in legs.items():
+                back = legs.get((kb, ka))
+                if back is None or (kb, ka) in seen:
+                    continue
+                seen.add((ka, kb))
+                a, b = stations[ka], stations[kb]
+                # Start at the station that is closer to the reference system
+                if b['dist_ref'] < a['dist_ref']:
+                    a, b, out, back = b, a, back, out
+                if a['dist_ref'] > max_start_distance:
+                    continue
+                routes.append(self._route(a, b, out, back, jump_range, secs_per_jump))
+        else:
+            for (ka, kb), out in legs.items():
+                a, b = stations[ka], stations[kb]
+                if a['dist_ref'] > max_start_distance:
+                    continue
+                routes.append(self._route(a, b, out, None, jump_range, secs_per_jump))
+
+        routes.sort(key=lambda r: r['profit_hour'], reverse=True)
+        self.progress(f"{len(routes)} {'round trips' if round_trips else 'trades'} found "
+                      f"({self.client.requests} requests).")
+        return routes[:max_results]
+
+    @staticmethod
+    def _route(a: dict, b: dict, out: dict, back: dict | None, jump_range: float, secs_per_jump: float) -> dict:
+        jumps, secs = estimate_trip_secs(out['distance'], jump_range, a['arrival_ls'], b['arrival_ls'],
+                                         round_trip=back is not None, secs_per_jump=secs_per_jump)
+        profit = out['total'] + (back['total'] if back else 0)
+        ages = [x for x in (out.get('age_h'), back.get('age_h') if back else None) if x is not None]
+        return {
+            'start_system': a['system'], 'start_station': a['station'], 'start_type': a['station_type'],
+            'start_arrival_ls': a['arrival_ls'], 'dist_to_start': a['dist_ref'],
+            'system': b['system'], 'station': b['station'], 'station_type': b['station_type'],
+            'arrival_ls': b['arrival_ls'], 'distance': out['distance'], 'jumps': jumps, 'trip_secs': secs,
+            'out_name': out['name'], 'out_buy': out['buy'], 'out_sell': out['sell'], 'out_profit': out['profit'],
+            'out_amount': out['amount'], 'out_total': out['total'], 'out_supply': out['supply'],
+            'out_demand': out['demand'],
+            'back_name': back['name'] if back else '', 'back_buy': back['buy'] if back else 0,
+            'back_sell': back['sell'] if back else 0, 'back_profit': back['profit'] if back else 0,
+            'back_amount': back['amount'] if back else 0, 'back_total': back['total'] if back else 0,
+            'round_trip': back is not None,
+            'profit_trip': profit, 'profit_hour': profit * 3600.0 / secs,
+            'age_h': max(ages) if ages else None,
+            'capital_needed': max(out['buy'] * out['amount'], (back['buy'] * back['amount']) if back else 0),
+        }
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -397,8 +411,8 @@ def waypoint_entry(system: str, station: str, sell: dict, buy: dict) -> dict:
 
 
 def route_to_waypoints(route: dict) -> dict:
-    """ Waypoint file content for the round trip: A (sell return commodity, buy outbound), B (sell outbound, buy
-    return commodity), REPEAT. """
+    """ Waypoint file content. Round trip: A (sell return commodity, buy outbound), B (sell outbound, buy return
+    commodity), REPEAT. One way: A (buy), B (sell). """
     out_name = route['out_name']
     back_name = route.get('back_name') or ''
     wp = {"GlobalShoppingList": dict(waypoint_entry("", "", {}, {}), Skip=True)}
@@ -406,5 +420,6 @@ def route_to_waypoints(route: dict) -> dict:
                              {back_name: 9999} if back_name else {}, {out_name: 9999})
     wp["2"] = waypoint_entry(route['system'], route['station'], {out_name: 9999},
                              {back_name: 9999} if back_name else {})
-    wp["3"] = waypoint_entry("REPEAT", "", {}, {})
+    if route.get('round_trip', True):
+        wp["3"] = waypoint_entry("REPEAT", "", {}, {})
     return wp

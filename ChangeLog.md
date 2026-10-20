@@ -1,3 +1,11 @@
+# 10/20/2026 v1.9.4 b32
+- Trade tab reworked like the Inara trade route search: searches the area around a reference system (your
+  location) instead of only from the current station. Settings: max. distance to the start, max. distance between
+  the stations, max. star distance, cargo, min. supply/demand, price age, pad size, jump range, number of
+  commodities, fleet carriers / megaships / planetary ports / Odyssey settlements yes/no, round trips or one way,
+  sort order. For every commodity the sellers and buyers in the area are loaded (Ardent Insight API) and combined
+  to trades and round trips. Results with distance to start, profit per trip/hour and price age; start directly.
+
 # 10/20/2026 v1.9.4 b31
 - New Trade tab: finds the best round trips from a start station (like the Inara trade routes) and starts one
   directly. Start market from Market.json (docked) or the Ardent Insight API (EDDN data), buyers of every export

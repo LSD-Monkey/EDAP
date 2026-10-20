@@ -445,10 +445,17 @@ class EDAutopilot:
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
             "WaypointRestartDelay": 10,  # Waypoint: secs to wait before an auto-restart / a new station attempt
             "RandomnessScale": 1.0,  # EnableRandomness: factor for the random pauses (0.5 = shorter, 2 = longer)
-            "TradeMaxDistance": 60,  # Trade tab: max. distance between the two stations in ly
+            "TradeSearchRadius": 50,  # Trade tab: max. distance from the reference system to the start station
+            "TradeMaxHopDistance": 50,  # Trade tab: max. distance between the two stations in ly
             "TradeMaxArrivalLs": 5000,  # Trade tab: max. distance of a station from the arrival star
             "TradeMaxAgeHours": 24,  # Trade tab: ignore market data older than this
-            "TradeIncludePlanetary": False,  # Trade tab: include planetary stations
+            "TradeMinVolume": 0,  # Trade tab: min. supply/demand (0 = cargo capacity)
+            "TradeCommodityCount": 50,  # Trade tab: number of commodities searched (most valuable first)
+            "TradeIncludeCarriers": False,  # Trade tab: include fleet carriers
+            "TradeIncludeMegaships": False,  # Trade tab: include megaships
+            "TradeIncludePlanetary": False,  # Trade tab: include planetary ports
+            "TradeIncludeSettlements": False,  # Trade tab: include Odyssey settlements
+            "TradeMode": "Round trips",  # Trade tab: 'Round trips' or 'One way'
             "TradeSortBy": "Profit per hour",  # Trade tab: sort order
             "TradeSecsPerJump": 110,  # Trade tab: time estimate per jump incl. alignment (measured ~110 s)
         }
