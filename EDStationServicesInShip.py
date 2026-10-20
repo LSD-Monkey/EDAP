@@ -241,8 +241,8 @@ class CommoditiesMarket:
                     'supply_demand_col': {'rect': [0.42, 0.227, 0.49, 0.90]},
                     # Large name of the highlighted commodity in the info panel right of the list
                     # 0.70 cut off the start of the name ('TICAPPLIANCES' for DOMESTIC APPLIANCES, 'SILVER' not
-                    # readable, 2026-10-20 18:29/18:45). The name starts at ~0.688 on 3440x1440.
-                    'selected_name': {'rect': [0.678, 0.183, 0.99, 0.228]},
+                    # readable, 2026-10-20 18:29/18:45). 0.678 still cut 'PE' of PERFORMANCE ENHANCERS (20:13).
+                    'selected_name': {'rect': [0.655, 0.183, 0.99, 0.228]},
                     # Title of the BUY/SELL COMMODITY dialog ('SELL COMMODITY' at x 0.27-0.41, y 0.20-0.23 in
                     # the video of session 2026-10-20_16-57-51). Without the dialog only the list header is there.
                     'dialog_title': {'rect': [0.25, 0.185, 0.52, 0.240]}}
@@ -379,23 +379,59 @@ class CommoditiesMarket:
             if index > 0:
                 keys.send('UI_Down', hold=0.08, repeat=index, repeat_delay=0.12)
         corrected = 0
-        for attempt in range(4):
+        stepped = 0
+        max_steps = 30
+        attempt = 0
+        while attempt < 4:
             sleep(0.7)
             cur = self._selected_commodity_name()
             if cur is None:
-                logger.debug(f"Market list: selected commodity not readable, using counted position for '{name}'.")
-                self.last_select_info = "name not readable, counted position used"
+                if stepped:
+                    sleep(0.5)
+                    cur = self._selected_commodity_name()
+                if cur is None:
+                    if stepped:
+                        self.last_select_info = "FAILED: name not readable while searching the list"
+                        return False
+                    logger.debug(f"Market list: selected commodity not readable, using counted position for '{name}'.")
+                    self.last_select_info = "name not readable, counted position used"
+                    return True
+            if self._norm(name) and self._norm(name) == self._norm(cur):
+                self.last_select_info = f"OCR confirmed ('{cur}')" + (f", corrected {corrected}x" if corrected else "")
                 return True
             cur_i = self._match_item(cur, items)
             if cur_i is None:
                 if self._norm(name) in self._norm(cur):
                     self.last_select_info = f"OCR confirmed ('{cur}')"
                     return True
+                # A commodity of this market that is not in EDAP's list: the game shows more items in the list than
+                # EDAP counts (PERFORMANCE ENHANCERS with stock 0 in the BUY list at Stiegler Dock, 2026-10-20 20:13,
+                # all positions after it were off by one and Bertrandite was never bought). Step towards the target
+                # one item at a time and read the name after every step.
+                all_items = self._all_items_sorted()
+                j = self._match_item(cur, all_items)
+                t = next((k for k, it in enumerate(all_items)
+                          if self._norm(it['Name_Localised']) == self._norm(name)), None)
+                if j is not None and j == t:
+                    self.last_select_info = f"OCR confirmed ('{cur}')"
+                    return True
+                if j is not None and t is not None and j != t and stepped < max_steps:
+                    step = 1 if t > j else -1
+                    logger.info(f"Market list: '{all_items[j]['Name_Localised']}' (not in EDAP's list) selected, "
+                                f"stepping {'down' if step > 0 else 'up'} to '{name}'.")
+                    self._move(keys, step)
+                    stepped += 1
+                    corrected += 1
+                    continue
                 # A text that is no commodity: are we still in the market? ('NEUTBAL'/'CORDIAI' were the
                 # reputation of the station menu, EDAP had left the market and opened the mission board.)
                 if self.in_station_menu():
                     self.ap_ckb('log', f"Market list: not in the commodities market (read '{cur}').")
                     self.last_select_info = f"FAILED: not in the market (read '{cur}')"
+                    return False
+                if j is not None:
+                    # A known commodity, but not the target: buying here would buy the wrong one.
+                    self.last_select_info = f"FAILED: '{cur}' selected instead of '{name}'"
                     return False
                 logger.debug(f"Market list: OCR '{cur}' does not match a list item, using counted position.")
                 self.last_select_info = f"OCR '{cur}' is no list item, counted position used"
@@ -405,15 +441,30 @@ class CommoditiesMarket:
                 self.last_select_info = f"OCR confirmed ('{cur}')" + (f", corrected {corrected}x" if corrected else "")
                 return True
             corrected += 1
+            attempt += 1
             delta = index - cur_i
+            if attempt >= 3 and abs(delta) <= 3:
+                # The same small offset again (items in the game list that EDAP does not know): single steps
+                delta = 1 if delta > 0 else -1
             logger.info(f"Market list: '{items[cur_i]['Name_Localised']}' selected instead of '{name}', "
                         f"correcting by {delta:+d}.")
             if delta > 0:
                 keys.send('UI_Down', hold=0.08, repeat=delta, repeat_delay=0.15)
             else:
                 keys.send('UI_Up', hold=0.08, repeat=-delta, repeat_delay=0.15)
+            if attempt >= 3 and stepped < max_steps:
+                attempt = 2  # keep stepping while the OCR shows progress, limited by max_steps
+                stepped += 1
         self.last_select_info = "FAILED: could not reach the item after 4 corrections"
         return False
+
+    def _all_items_sorted(self) -> list:
+        """ All commodities of Market.json in the order of the game list (category, then name), including the
+        ones EDAP does not count as buyable/sellable. """
+        data = self.market_parser.current_data or {}
+        items = [i for i in data.get('Items', []) if i.get('Name_Localised')]
+        items = sorted(items, key=lambda x: x['Name_Localised'].lower())
+        return sorted(items, key=lambda x: (x.get('Category_Localised') or '').lower())
 
     @staticmethod
     def _move(keys, delta: int):

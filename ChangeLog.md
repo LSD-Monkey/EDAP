@@ -1,3 +1,13 @@
+# 10/20/2026 v1.9.4 b35
+- FIX market: wrong commodity selected, Waypoint Assist stopped at Stiegler Dock (log 2026-10-20 20:14). The BUY list
+  of the game also showed PERFORMANCE ENHANCERS (stock 0, not buyable, so not counted by EDAP). Every item after it
+  was one position further down than EDAP counted, Bertrandite was never reached and nothing was bought. The OCR
+  read the wrong item, but as it was not in EDAP's list the counted position was used anyway.
+  Now the read name is also compared with all commodities of the market: if it is one that EDAP does not count,
+  EDAP steps towards the target one item at a time and reads the name after every step. A known but wrong
+  commodity is never bought any more. Repeated small offsets are corrected with single steps.
+- FIX market: the name region still cut off the start of long names ('RFORMANCEENHANCERS'): 0.678 -> 0.655.
+
 # 10/20/2026 v1.9.4 b34
 - FIX 'Waypoint Assist stopped: main menu, game closed or not in the ship' right after starting a trade route
   (log 2026-10-20 19:44): EDAP was started before the game. The journal reader opened the new journal of the game,
