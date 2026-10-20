@@ -1,3 +1,26 @@
+# 10/20/2026 v1.9.4 b27 (log analysis 2026-10-20: 43 min productive, then 3 h stuck)
+- In-game SC Assist: throttle 50 % after the SCA is activated (and aligned). With throttle 0 the SCA sometimes
+  never started (distance stayed at 76.8 Ls for 13 minutes).
+- SC Assist progress watchdog: the distance under the destination name ('MACGREGOR ORBITAL 76.8Ls') is read with
+  the line of sight OCR. If it does not change for 'SCAssistStallTime' (default 60 s): 1st time compass align +
+  throttle 50 %, 2nd time re-activate the SCA, 3rd time give up.
+- Game connection check ('GameConnectionCheck', default on): every assist stops (like the stop button, no
+  auto-restart, no further key presses) when
+  - 'CONNECTION ERROR ... matchmaking server' is on screen (checked during SC Assist and whenever the Nav Panel
+    does not open),
+  - the journal shows the main menu or the game was closed,
+  - Status.json reports Flags 0 (not in a ship, not on foot) for 20 s.
+  Before, EDAP kept trying for 2 hours after the connection was lost (09:05).
+- FIX endless loop in Waypoint Assist: 'Unable to activate in-game Supercruise Assist ... Stopping.' did not stop,
+  the waypoint loop started the next attempt at once (697 attempts, 09:52 - 11:59). sc_assist() now returns a
+  result, Waypoint Assist stops after 'WaypointStationRetries' (default 3) failed attempts in a row.
+- Fuel check before the route ('FuelRouteCheck', default on, ships without fuel scoop): the fuel use per jump is
+  learned from the FSDJump events of the recent journals (same ship, similar cargo, fuel = k * dist^p), the jump
+  distances come from NavRoute.json. Stops before the jump if the fuel is not enough, warns if the arrival fuel
+  will be below the abort threshold. (Kakmbutan route: about 57 t of 64 t, arrival with 11 %.)
+- Low fuel abort ('FuelThreasholdAbortAP') only while there are jumps left; in the destination system EDAP
+  continues to the station instead of stopping just before it.
+
 # 10/20/2026 v1.9.4 b26
 - FIX hard crash ('Windows fatal exception: access violation', crash.log 2026-10-20 08:48): PaddleOCR is not
   thread safe, but the engine thread (Nav Panel) and the SC monitoring thread (disengage text) used the same

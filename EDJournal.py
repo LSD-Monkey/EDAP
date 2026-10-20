@@ -238,6 +238,7 @@ class EDJournal:
             'dist_jumped': 0,
             'jumps_remains': 0,
             'fuel_capacity': None,
+            'game_state': 'in_game',  # 'in_game', 'main_menu' (Music MainMenu) or 'shutdown' (game closed)
             'fuel_level': None,
             'fuel_percent': None,
             'is_scooping': False,
@@ -447,6 +448,16 @@ class EDJournal:
                 self.ship['has_std_dock_comp'] = check_std_docking_computer(log['Modules'])
                 self.ship['has_sco_fsd'] = check_sco_fsd(log['Modules'])
                 self.ship['has_supercruise_assist'] = check_supercruise_assist(log['Modules'])
+
+            # parse game state (main menu / game closed / back in game)
+            if log_event == 'Music' and log.get('MusicTrack') == 'MainMenu':
+                self.ship['game_state'] = 'main_menu'
+            elif log_event == 'Shutdown':
+                self.ship['game_state'] = 'shutdown'
+            elif log_event in ('LoadGame', 'Location', 'FSDJump', 'SupercruiseEntry', 'SupercruiseExit',
+                               'Docked', 'Undocked', 'StartJump') or \
+                    (log_event == 'Music' and log.get('MusicTrack') != 'MainMenu'):
+                self.ship['game_state'] = 'in_game'
 
             # parse fuel
             if 'FuelLevel' in log and self.ship['type'] != 'TestBuggy':

@@ -40,6 +40,10 @@ from StatusParser import StatusParser
 from Voice import *
 from Robigo import *
 from TCE_Integration import TceIntegration
+import json
+import os
+import re
+import time
 
 """
 File:EDAP.py    EDAutopilot
@@ -56,6 +60,17 @@ Author: sumzer0@yahoo.com
 # Exception class used to unroll the call tree to to stop execution
 class EDAP_Interrupt(Exception):
     pass
+
+
+class EDAP_GameNotRunning(EDAP_Interrupt):
+    """ Raised when the game lost the connection to the server, is in the main menu or was closed.
+    Derived from EDAP_Interrupt: every assist stops like on a user stop (no auto-restart, no key presses). """
+    pass
+
+
+# HUD/dialog texts (spaces removed, upper case) that show a lost connection to the game server
+CONNECTION_ERROR_MARKERS = ('CONNECTIONERROR', 'MATCHMAKINGSERVER', 'RETURNTOTHEMAINMENU', 'LOSTCONNECTION',
+                            'COULDNOTCONNECT', 'SERVERCONNECTION', 'VERBINDUNGSFEHLER', 'HAUPTMEN')
 
 
 class ScTargetAlignReturn(Enum):
@@ -78,6 +93,21 @@ class SCAssistResult(Enum):
     Reengage = 1  # In-game SC Assist needs to be activated again
     Failed = 2  # Dropped elsewhere, destination changed or timeout
     NoLineOfSight = 3  # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': target behind a planet/star
+
+
+_SCA_DIST_RE = re.compile(r'(\d+(?:[.,]\d+)?)\s*(LS|LY|KM|MM|AU|M)(?![A-Z])')
+
+
+def parse_sca_distance(text: str) -> str | None:
+    """ Distance to the target as shown under the destination name on the HUD, e.g.
+    'MACGREGOR ORBITAL 76.8Ls 8.9d' -> '76.8LS'. Returned as normalised text (value + unit), only used to see if it
+    changes. None if no distance found. """
+    if not text:
+        return None
+    m = _SCA_DIST_RE.search(text.upper())
+    if not m:
+        return None
+    return m.group(1).replace(',', '.') + m.group(2)
 
 
 class FSDAssistReturn(Enum):
@@ -265,6 +295,11 @@ class EDAutopilot:
             threading.excepthook = _log_thread_exception
             self.ap_thread = kthread.KThread(target=self.engine_loop, name="EDAutopilot")
             self.ap_thread.start()
+            # Stops the assists when the game loses the server connection, goes to the main menu or is closed
+            self._game_stop_reason = ''
+            self._game_watchdog_thread = threading.Thread(target=self._game_watchdog_loop, daemon=True,
+                                                          name="EDAP game watchdog")
+            self._game_watchdog_thread.start()
 
         # Start thread to delete old log files.
         del_log_files_thread = threading.Thread(target=delete_old_log_files, daemon=True)
@@ -396,6 +431,10 @@ class EDAutopilot:
             "SCAssistNoLOSEscapeTime": 20,  # In-game SC Assist: seconds to fly 'up' when the target is behind a body
             "DockApproachTime": 20,  # seconds at 50% throttle towards the station before requesting docking (was 12)
             "WaypointAutoRestarts": 3,  # Waypoint Assist restarts itself after an error, max. this often in a row
+            "SCAssistStallTime": 60,  # In-game SC Assist: secs without change of the distance to the target = stuck
+            "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
+            "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
+            "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
         }
         # NOTE!!! When adding a new config value above, add the same after read_config() to set
         # a default value or an error will occur reading the new value!
@@ -484,6 +523,14 @@ class EDAutopilot:
                 cnf['DockApproachTime'] = 20
             if 'WaypointAutoRestarts' not in cnf:
                 cnf['WaypointAutoRestarts'] = 3
+            if 'SCAssistStallTime' not in cnf:
+                cnf['SCAssistStallTime'] = 60
+            if 'WaypointStationRetries' not in cnf:
+                cnf['WaypointStationRetries'] = 3
+            if 'FuelRouteCheck' not in cnf:
+                cnf['FuelRouteCheck'] = True
+            if 'GameConnectionCheck' not in cnf:
+                cnf['GameConnectionCheck'] = True
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -2630,15 +2677,14 @@ class EDAutopilot:
         if self.jn.ship_state()['has_supercruise_assist']:
             self.ap_ckb('log', " - Station: " + station_name)
             self.update_ap_status(f"SC to Station: {station_name}")
-            self.sc_assist(scr_reg, dst_name=station_name)
-            return True
+            return self.sc_assist(scr_reg, dst_name=station_name) is not False
 
         # EDAP steered SC Assist needs the compass
         sleep(3)  # Wait for compass to stop flashing blue!
         if self.have_destination(scr_reg):
             self.ap_ckb('log', " - Station: " + station_name)
             self.update_ap_status(f"SC to Station: {station_name}")
-            self.sc_assist(scr_reg, dst_name=station_name)
+            return self.sc_assist(scr_reg, dst_name=station_name) is not False
         else:
             self.ap_ckb('log', f" - Could not target station: {station_name}")
             return False
@@ -2727,9 +2773,13 @@ class EDAutopilot:
                 self.position(scr_reg, refueled)
 
                 if self.jn.ship_state()['fuel_percent'] < self.config['FuelThreasholdAbortAP']:
-                    self.ap_ckb('log', "AP Aborting, low fuel")
-                    self.vce.say("AP Aborting, low fuel")
-                    return FSDAssistReturn.Failed
+                    if self.jn.ship_state()['target']:
+                        self.ap_ckb('log', "AP Aborting, low fuel")
+                        self.vce.say("AP Aborting, low fuel")
+                        return FSDAssistReturn.Failed
+                    # Final system reached: no more jumps, the station in this system can still be reached
+                    self.ap_ckb('log+vce', f"Low fuel ({self.jn.ship_state()['fuel_percent']}%), but the destination "
+                                           f"system is reached. Continuing to the station.")
 
         sleep(2)  # wait until screen stabilizes from possible last positioning
 
@@ -2764,7 +2814,7 @@ class EDAutopilot:
         if not self.have_destination(scr_reg):
             self.ap_ckb('log', "Quiting SC Assist - Compass not found. Rotate ship and try again.")
             logger.debug("Quiting sc_assist - compass not found")
-            return
+            return False
         # else:
         #     # Quick calibrate the compass
         #     self.quick_calibrate_compass()
@@ -2842,8 +2892,11 @@ class EDAutopilot:
             self.vce.say("Exiting Supercruise, setting throttle to zero")
             self.set_throttle_0()  # make sure we don't continue to land
             self.ap_ckb('log', "Supercruise dropped, terminating SC Assist")
+            if align_failed:
+                return False
 
         self.ap_ckb('log+vce', "Supercruise Assist complete")
+        return True
 
     def sc_assist(self, scr_reg, do_docking=True, dst_name: str | None = None):
         """ Supercruise Assist using the in-game Supercruise Assist (SCA) module.
@@ -2862,6 +2915,7 @@ class EDAutopilot:
         @param do_docking: Dock after arrival.
         @param dst_name: Name of the destination as shown in the Nav Panel. If None, the current in-game
         destination (Status.json) is used.
+        @return: True if we arrived at the destination, False if not.
         """
         logger.debug("Entered sc_assist (in-game SCA)")
 
@@ -2882,7 +2936,7 @@ class EDAutopilot:
         if not target:
             self.ap_ckb('log', "Quiting SC Assist - No destination selected.")
             logger.debug("Quiting sc_assist - no destination in Status.json")
-            return
+            return False
 
         self.ap_ckb('log+vce', f"Supercruise Assist to {target}")
 
@@ -2899,6 +2953,8 @@ class EDAutopilot:
         for activation in range(1, max_activations + 1):
             res = self._sc_assist_ingame_engage(scr_reg, target)
             if not res:
+                # A Nav Panel that does not open is often a 'CONNECTION ERROR' dialog on screen -> stop, no retry
+                self.check_connection_ocr(scr_reg)
                 if activation == 1 and self.config['SCAssistFallbackManual']:
                     self.ap_ckb('log', f"Unable to activate in-game Supercruise Assist for '{target}'. "
                                        f"Using EDAP SC Assist.")
@@ -2906,12 +2962,12 @@ class EDAutopilot:
                 elif activation == 1:
                     self.set_throttle_0()
                     self.ap_ckb('log+vce', f"Unable to activate in-game Supercruise Assist for '{target}'. "
-                                           f"Check the Nav Panel calibration. Stopping.")
-                    return
+                                           f"Check the Nav Panel calibration.")
+                    return False
                 else:
                     self.set_throttle_0()
                     self.ap_ckb('log+vce', "Unable to re-activate Supercruise Assist, terminating.")
-                    return
+                    return False
 
             # Use the exact in-game name from now on (the given name may be partial or OCR-ish)
             target = self.nav_panel.get_status_destination() or target
@@ -2932,14 +2988,15 @@ class EDAutopilot:
                 self.vce.say("Exiting Supercruise, setting throttle to zero")
                 self.set_throttle_0()  # make sure we don't continue to land
                 self.ap_ckb('log', "Supercruise Assist terminated before reaching the destination.")
-                return
+                return False
         else:
             self.set_throttle_0()
             self.ap_ckb('log+vce', "Supercruise Assist failed too often, terminating.")
-            return
+            return False
 
         self._sc_assist_arrival(do_docking)
         self.ap_ckb('log+vce', "Supercruise Assist complete")
+        return True
 
     def _sc_assist_ingame_engage(self, scr_reg, target: str) -> bool:
         """ Activates the in-game Supercruise Assist and aligns to the target while standing still.
@@ -2974,6 +3031,9 @@ class EDAutopilot:
                 # Not fatal, the in-game SCA turns the ship to the target by itself.
                 logger.warning(f"sc_assist: compass align failed: {e}")
 
+        # 4. Throttle 50 %: the SCA then starts moving at once (with throttle 0 it sometimes never started, the
+        #    distance stayed the same for 13 minutes, log 2026-10-20 08:52).
+        self.set_throttle_50()
         return True
 
     def _sc_assist_ingame_monitor(self, scr_reg, target: str) -> SCAssistResult:
@@ -2997,6 +3057,11 @@ class EDAutopilot:
         check_los = True
         last_los_time = time.time()
         los_cnt = 0
+        # Progress watchdog: the distance to the target (read with the line of sight check) must change
+        stall_time = float(self.config.get('SCAssistStallTime', 60))
+        last_dist = None
+        last_progress = time.time()
+        stall_cnt = 0
 
         while True:
             sleep(0.5)
@@ -3046,12 +3111,22 @@ class EDAutopilot:
             if not self.keys.elite_has_focus():
                 last_ocr_time = time.time()
                 last_los_time = time.time()
+                last_progress = time.time()
                 continue
 
             # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': the SCA can not reach the target (behind a body)
             if check_los and in_sc and (time.time() - last_los_time) >= ocr_interval:
                 last_los_time = time.time()
                 no_los = self.sc_assist_no_los_ocr(scr_reg)
+                los_text = getattr(self, '_sca_last_los_text', '')
+                # 'CONNECTION ERROR ... Could not connect to matchmaking server' shows up in the same screen area
+                self.check_connection_text(los_text)
+                dist = parse_sca_distance(los_text)
+                if dist is not None and dist != last_dist:
+                    if last_dist is not None:
+                        stall_cnt = 0
+                    last_dist = dist
+                    last_progress = time.time()
                 if no_los is None:
                     check_los = False  # Not supported (no locale text)
                 elif no_los:
@@ -3100,6 +3175,30 @@ class EDAutopilot:
                                                "'sca_active' region calibration. Continuing without the check.")
                             check_ocr = False
 
+            # Progress watchdog: distance to the target did not change -> the ship does not move
+            if (stall_time > 0 and in_sc and last_dist is not None and
+                    (time.time() - last_progress) > stall_time):
+                stall_cnt += 1
+                last_progress = time.time()
+                self.ap_ckb('log+vce', f"Supercruise Assist makes no progress, distance stays at {last_dist} "
+                                       f"for {int(stall_time)} s ({stall_cnt}).")
+                sca_active_now = ocr_confirmed and ocr_not_active_cnt == 0
+                if stall_cnt == 2 and not sca_active_now:
+                    self.ap_ckb('log', "Re-activating Supercruise Assist (no progress).")
+                    return SCAssistResult.Reengage
+                elif stall_cnt >= 3:
+                    self.ap_ckb('log+vce', "Supercruise Assist makes no progress, giving up.")
+                    return SCAssistResult.Failed
+                else:
+                    try:
+                        self.compass_align(scr_reg)
+                    except EDAP_Interrupt:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"sc_assist: compass align failed: {e}")
+                    self.set_throttle_50()
+                    last_progress = time.time()
+
             if 0 < timeout < (time.time() - start_time):
                 self.ap_ckb('log', f"SC Assist timeout ({timeout} s).")
                 return SCAssistResult.Failed
@@ -3131,9 +3230,11 @@ class EDAutopilot:
         # TODO delete this line when COLOR_RGB2BGR is removed from get_screen()
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         ocr_textlist = self.ocr.image_simple_ocr(image, 'sca_no_los')
+        self._sca_last_los_text = ""
         if ocr_textlist is None:
             return False
-        text = " ".join(str(t) for t in ocr_textlist).upper().replace(" ", "")
+        self._sca_last_los_text = " ".join(str(t) for t in ocr_textlist)
+        text = self._sca_last_los_text.upper().replace(" ", "")
         found = "LINEOFSIGHT" in text or self.ocr.string_similarity(msg, str(ocr_textlist)) > 0.6
         logger.debug(f"SC Assist no line of sight check: {str(ocr_textlist)} -> {found}")
         return found
@@ -3449,6 +3550,130 @@ class EDAutopilot:
                 except EDAP_Interrupt:
                     pass
 
+    # ------------------------------------------------------------------
+    # Game connection / main menu detection
+    # ------------------------------------------------------------------
+    def _any_assist_active(self) -> bool:
+        return bool(self.fsd_assist_enabled or self.sc_assist_enabled or self.waypoint_assist_enabled or
+                    self.robigo_assist_enabled or self.afk_combat_assist_enabled or self.dss_assist_enabled or
+                    self.single_waypoint_enabled)
+
+    def _journal_tail_game_state(self) -> str:
+        """ Last game state in the current journal ('in_game', 'main_menu', 'shutdown'). Reads only the end of the
+        file with its own file handle (the journal reader of the engine thread must not be used from here). """
+        try:
+            path = self.jn.current_log
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(max(0, size - 8192))
+                lines = f.read().decode('utf-8', errors='ignore').splitlines()
+        except Exception:
+            return 'in_game'
+        for line in reversed(lines):
+            if '"event"' not in line:
+                continue
+            if '"Shutdown"' in line:
+                return 'shutdown'
+            if '"MusicTrack":"MainMenu"' in line.replace(' ', ''):
+                return 'main_menu'
+            if any(f'"{e}"' in line for e in ('LoadGame', 'Location', 'FSDJump', 'SupercruiseEntry',
+                                              'SupercruiseExit', 'Docked', 'Undocked', 'StartJump', 'Music')):
+                return 'in_game'
+        return 'in_game'
+
+    def _status_flags_raw(self) -> tuple[int | None, int | None]:
+        """ (Flags, Flags2) read directly from Status.json (own file read, thread independent). """
+        try:
+            with open(self.status.file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data.get('Flags'), data.get('Flags2')
+        except Exception:
+            return None, None
+
+    def _game_watchdog_loop(self):
+        """ Background thread: while an assist runs, checks the journal and Status.json. If the game is in the main
+        menu, was closed, or reports no ship/on-foot state for 20 s (Flags 0), the running assist is stopped. """
+        flags_zero_since = None
+        stop_sent = False
+        while not self.terminate:
+            try:
+                sleep(3)
+                if not self.config.get('GameConnectionCheck', True) or not self._any_assist_active():
+                    flags_zero_since = None
+                    stop_sent = False
+                    continue
+                if stop_sent:
+                    continue
+                reason = ''
+                state = self._journal_tail_game_state()
+                if state == 'main_menu':
+                    reason = "Elite Dangerous is in the main menu (journal)"
+                elif state == 'shutdown':
+                    reason = "Elite Dangerous was closed (journal)"
+                else:
+                    flags, flags2 = self._status_flags_raw()
+                    if flags == 0 and not flags2:
+                        if flags_zero_since is None:
+                            flags_zero_since = time.time()
+                        elif time.time() - flags_zero_since > 20:
+                            reason = "Not in the game any more (Status.json Flags 0)"
+                    else:
+                        flags_zero_since = None
+                if reason:
+                    self.stop_game_not_running(reason, from_engine=False)
+                    stop_sent = True
+            except Exception as e:
+                logger.warning(f"game watchdog: {e}")
+
+    def stop_game_not_running(self, reason: str, from_engine: bool = True):
+        """ Stops the running assist because the game is not playable (connection lost, main menu, closed). """
+        self._game_stop_reason = reason
+        logger.warning(f"Game not running: {reason}")
+        self.ap_ckb('log+vce', f"Connection to the game lost or game not running: {reason}. Stopping the assist.")
+        if from_engine:
+            raise EDAP_GameNotRunning(reason)
+        if self.ap_thread is not None and self.ap_thread.is_alive():
+            self.ctype_async_raise(self.ap_thread, EDAP_GameNotRunning)
+
+    def check_connection_text(self, text) -> None:
+        """ Raises EDAP_GameNotRunning if the OCR text contains a connection error dialog. """
+        if not text or not self.config.get('GameConnectionCheck', True):
+            return
+        if not isinstance(text, str):
+            text = " ".join(str(t) for t in text)
+        joined = text.upper().replace(" ", "")
+        for marker in CONNECTION_ERROR_MARKERS:
+            if marker in joined:
+                self.stop_game_not_running(f"connection error on screen ('{text[:80]}')")
+
+    def check_connection_ocr(self, scr_reg) -> None:
+        """ Reads the screen centre (where the 'CONNECTION ERROR' dialog appears) and raises EDAP_GameNotRunning if a
+        connection error is shown. Used when something unexpectedly fails (e.g. the Nav Panel does not open). """
+        if not self.config.get('GameConnectionCheck', True):
+            return
+        try:
+            image = self.scr.get_screen_region(scr_reg.reg['sca_no_los']['rect'])
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            ocr_textlist = self.ocr.image_simple_ocr(image, 'connection_check')
+        except EDAP_Interrupt:
+            raise
+        except Exception as e:
+            logger.debug(f"check_connection_ocr: {e}")
+            return
+        logger.debug(f"Connection check OCR: {ocr_textlist}")
+        if ocr_textlist:
+            self.check_connection_text(ocr_textlist)
+
+    def game_is_playable(self) -> bool:
+        """ False if the journal shows main menu / shutdown or Status.json has Flags 0 (no ship, not on foot). """
+        if self._journal_tail_game_state() != 'in_game':
+            return False
+        flags, flags2 = self._status_flags_raw()
+        if flags == 0 and not flags2:
+            return False
+        return True
+
     def _release_keys_safe(self):
         """ Releases all keys, never raises. """
         try:
@@ -3557,6 +3782,11 @@ class EDAutopilot:
                 try:
                     self.waypoint_assist(self.keys, self.scrReg)
                     break
+                except EDAP_GameNotRunning:
+                    logger.debug("Caught game not running exception")
+                    self.ap_ckb('log', f"Waypoint Assist stopped: {getattr(self, '_game_stop_reason', '') or 'game not running'}.")
+                    self._release_keys_safe()
+                    break
                 except EDAP_Interrupt:
                     logger.debug("Caught stop exception")
                     self._release_keys_safe()
@@ -3570,6 +3800,10 @@ class EDAutopilot:
                         restarts = 0  # the last restart was > 20 min ago, count again
                     if restarts >= max_restarts:
                         self.ap_ckb('log+vce', f"Waypoint Assist failed {restarts + 1} times in a row, giving up.")
+                        break
+                    if self.config.get('GameConnectionCheck', True) and not self.game_is_playable():
+                        self.ap_ckb('log+vce', "Game is not in flight (main menu, closed or disconnected), "
+                                               "no restart of Waypoint Assist.")
                         break
                     restarts += 1
                     last_restart = time.time()

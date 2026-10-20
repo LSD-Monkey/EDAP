@@ -8,6 +8,7 @@ from EDAP_data import *
 from EDJournal import StationType
 from EDKeys import EDKeys
 from EDlogger import logger
+from EDFuelPlanner import estimate_route_fuel
 import json
 from MarketParser import MarketParser
 from MousePt import MousePoint
@@ -587,7 +588,13 @@ class EDWayPoint:
 
         # Loop until complete, or error
         _abort = False
+        station_fail_cnt = 0  # failed attempts in a row to reach the current station
+        max_station_fails = max(1, int(self.ap.config.get('WaypointStationRetries', 3)))
         while not _abort:
+            # Game still running? (connection error dialog, main menu) -> raises and stops
+            if self.ap.config.get('GameConnectionCheck', True) and not self.ap.game_is_playable():
+                self.ap.stop_game_not_running("main menu, game closed or not in the ship")
+
             # Current location
             cur_star_system = self.ap.jn.ship_state()['cur_star_system'].upper()
             cur_station = self.ap.jn.ship_state()['cur_station'].upper()
@@ -670,6 +677,11 @@ class EDWayPoint:
                         self.ap_ckb('log+vce', f"Unable to target {next_wp_system} in Galaxy Map.")
                         _abort = True
                         break
+
+                # Enough fuel for the plotted route? (ships without fuel scoop)
+                if not self._fuel_ok_for_route():
+                    _abort = True
+                    break
 
                 # Select next target system
                 # TODO should this be in before every jump?
@@ -776,6 +788,20 @@ class EDWayPoint:
                     # Jump to the station by name
                     res = self.ap.supercruise_to_station(scr_reg, next_wp_station)
                     sleep(1)  # Allow status log to update
+                    if res:
+                        station_fail_cnt = 0
+                    else:
+                        # Before, a failure here started the next attempt at once, forever (log 2026-10-20:
+                        # 697 attempts in 2 hours while the game showed a connection error).
+                        station_fail_cnt += 1
+                        if station_fail_cnt >= max_station_fails:
+                            self.ap_ckb('log+vce', f"Could not reach {next_wp_station} after {station_fail_cnt} "
+                                                   f"attempts. Stopping Waypoint Assist.")
+                            _abort = True
+                            break
+                        self.ap_ckb('log+vce', f"Could not reach {next_wp_station}, attempt {station_fail_cnt} of "
+                                               f"{max_station_fails}. Trying again in 10 seconds.")
+                        sleep(10)
                     continue
                 else:
                     self.ap_ckb('log+vce', f"Arrived at target System: {next_wp_system}")
@@ -809,6 +835,49 @@ class EDWayPoint:
         else:
             self.ap_ckb('log+vce', "Waypoint Route was aborted.")
             self.ap.update_ap_status("Idle")
+
+    def _fuel_ok_for_route(self) -> bool:
+        """ Checks the fuel for the plotted route (NavRoute.json) with the fuel use learned from the recent jumps
+        in the journal. Only for ships without fuel scoop (with a scoop EDAP refuels at the stars).
+        Returns False if the fuel is not enough to reach the destination (-> stop, rather than to be stranded). """
+        ap = self.ap
+        if not ap.config.get('FuelRouteCheck', True):
+            return True
+        state = ap.jn.ship_state()
+        if state.get('has_fuel_scoop'):
+            return True
+        cap = state.get('fuel_capacity')
+        try:
+            status = ap.status.get_cleaned_data()
+            # Status.json is up to date after refuelling at a station (the journal 'RefuelAll' has no fuel level)
+            fuel = status.get('FuelMain') or state.get('fuel_level')
+            cargo = int(status.get('Cargo') or 0)
+            if not fuel or not cap:
+                return True
+            est = estimate_route_fuel(os.path.dirname(ap.jn.current_log), ap.nav_route.get_nav_route_data(),
+                                      cargo, state.get('cargo_capacity'), state.get('cur_star_system'))
+        except Exception as e:
+            logger.warning(f"Fuel check failed: {e}")
+            return True
+        if est is None:
+            self.ap_ckb('log', "Fuel check: not enough jumps with this ship and cargo in the journal yet, skipped.")
+            return True
+
+        reserve = cap * ap.config['FuelThreasholdAbortAP'] / 100.0
+        left = fuel - est['need']
+        left_min = fuel - est['need_max']
+        self.ap_ckb('log', f"Fuel check: {est['jumps']} jumps need about {est['need']:.1f} t "
+                           f"(max. {est['need_max']:.1f} t), tank {fuel:.1f} of {cap:.0f} t, "
+                           f"expected on arrival {left:.1f} t ({100 * left / cap:.0f}%).")
+        if left < 1.0:
+            self.ap_ckb('log+vce', f"Not enough fuel for this route: need about {est['need']:.1f} t, "
+                                   f"tank has {fuel:.1f} t. Stopping Waypoint Assist. Refuel or choose a shorter "
+                                   f"route (e.g. with a fuel stop as waypoint).")
+            return False
+        if left_min < reserve:
+            self.ap_ckb('log+vce', f"Warning: fuel on arrival will be low (about {100 * left / cap:.0f}%, "
+                                   f"worst case {100 * max(0.0, left_min) / cap:.0f}%).")
+        return True
 
     def reset_stats(self):
         # Clear stats

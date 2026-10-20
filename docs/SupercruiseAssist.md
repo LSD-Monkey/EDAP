@@ -46,6 +46,10 @@ If the ship has **no SCA module**, or the destination cannot be found in the Nav
 | `SCAssistAlign` | `true` | Align to the destination with the compass (throttle 0) after activating the SCA. |
 | `SCAssistCheckActiveOCR` | `true` | Check the HUD for *SUPERCRUISE ASSIST ACTIVE* (English locale only, `SC_ASSIST_ACTIVE_MSG`). |
 | `SCAssistNoLOSEscapeTime` | `20` | If *MOVE TO OBTAIN LINE OF SIGHT TO TARGET* is shown (target behind a planet/star, OCR region `sca_no_los`, English locale `SC_ASSIST_NO_LOS_MSG`): throttle 0, pitch up 90°, fly this many seconds, throttle 0, then re-activate the SCA (which aligns to the target again). |
+| `SCAssistStallTime` | `60` | Progress watchdog: if the distance to the target (shown under the destination name, read in region `sca_no_los`) does not change for this many seconds: 1st compass align + throttle 50 %, 2nd re-activate the SCA, 3rd give up. 0 = off. |
+| `GameConnectionCheck` | `true` | Stop all assists on a connection error dialog, main menu, game closed or Status.json Flags 0 for 20 s. |
+| `WaypointStationRetries` | `3` | Waypoint Assist stops after this many failed attempts in a row to reach a station. |
+| `FuelRouteCheck` | `true` | Waypoint Assist (ships without fuel scoop): estimate the fuel for the plotted route from the recent jumps in the journal and stop if it is not enough. |
 
 ## Calibration
 The screen region `Screen_Regions.full_panel.subregion.sca_active` (top center of the HUD) is added to
