@@ -352,6 +352,9 @@ class APGui:
             logger.debug("Detected 'dss_stop' callback msg")
             self.checkboxvar['DSS Assist'].set(0)
             self.check_cb('DSS Assist')
+        elif msg == 'market_test_stop':
+            self.checkboxvar['Market Test'].set(0)
+            self._mode_stopped('Market Test')
         elif msg == 'single_waypoint_stop':
             logger.debug("Detected 'single_waypoint_stop' callback msg")
             self.checkboxvar['Single Waypoint Assist'].set(0)
@@ -380,6 +383,9 @@ class APGui:
 
             self.checkboxvar['Single Waypoint Assist'].set(0)
             self.check_cb('Single Waypoint Assist')
+
+            self.checkboxvar['Market Test'].set(0)
+            self.check_cb('Market Test')
 
         elif msg == 'jumpcount':
             self.update_jumpcount(body)
@@ -740,13 +746,26 @@ class APGui:
         finally:
             self.root.after(1000, self._update_live_panel)
 
+    def _market_test_fill_list(self):
+        """ Fills the commodity dropdown with what the last opened market sells. """
+        try:
+            from MarketParser import MarketParser
+            mp = MarketParser()
+            data = mp.get_market_data() or {}
+            names = sorted(i.get('Name_Localised', '') for i in data.get('Items', [])
+                           if i.get('Stock', 0) > 0 and i.get('BuyPrice', 0) > 0)
+            self.market_test_combo['values'] = names
+        except Exception as e:
+            logger.debug(f"market test list: {e}")
+
     def clear_log(self):
         self.msgList.delete(0, tk.END)
 
     def _assist_running(self) -> bool:
         ap = self.ed_ap
         return any([ap.fsd_assist_enabled, ap.sc_assist_enabled, ap.waypoint_assist_enabled,
-                    ap.robigo_assist_enabled, ap.afk_combat_assist_enabled, ap.dss_assist_enabled])
+                    ap.robigo_assist_enabled, ap.afk_combat_assist_enabled, ap.dss_assist_enabled,
+                    getattr(ap, 'market_test_enabled', False), getattr(ap, 'single_waypoint_enabled', False)])
 
     def _run_ship_action(self, name: str, func):
         """ Runs a ship action started by a GUI button (throttle, Align to Target, ...) in a background thread.
@@ -997,6 +1016,27 @@ class APGui:
             elif self.checkboxvar['Single Waypoint Assist'].get() == 0 and self.SWP_A_running == True:
                 self.stop_single_waypoint_assist()
                 self._mode_stopped('Single Waypoint Assist')
+
+        if field == 'Market Test':
+            if self.checkboxvar['Market Test'].get() and not self.ed_ap.market_test_enabled:
+                if self._assist_running():
+                    self.log_msg("Market test: stop the running assist first.")
+                    self.checkboxvar['Market Test'].set(0)
+                    return
+                name = self.market_test_name.get().strip()
+                try:
+                    qty = max(1, int(float(self.market_test_qty.get())))
+                except ValueError:
+                    qty = 1
+                if not name:
+                    self.log_msg("Market test: enter a commodity first.")
+                    self.checkboxvar['Market Test'].set(0)
+                    return
+                self.ed_ap.set_market_test(name, qty, bool(self.market_test_sell.get()), True)
+                self._mode_started('Market Test')
+            elif not self.checkboxvar['Market Test'].get() and self.ed_ap.market_test_enabled:
+                self.ed_ap.set_market_test('', 1, True, False)
+                self._mode_stopped('Market Test')
 
         if field == 'Debug Overlay':
             self.ed_ap.debug_overlay = bool(self.checkboxvar['Debug Overlay'].get())
@@ -1363,8 +1403,38 @@ class APGui:
         cb_single_waypoint.grid(row=2, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
         self._tip(cb_single_waypoint, self.tooltips['Single Waypoint Assist'])
 
+        # Market test frame
+        blk_market_test = ttk.LabelFrame(page2, text="Market Test (docked)", padding=(10, 5))
+        blk_market_test.grid(row=2, column=1, padx=10, pady=5, sticky="NSEW")
+        blk_market_test.columnconfigure(1, weight=1)
+        ttk.Label(blk_market_test, text='Commodity:').grid(row=0, column=0, padx=2, pady=2, sticky="W")
+        self.market_test_name = tk.StringVar()
+        self.market_test_combo = ttk.Combobox(blk_market_test, textvariable=self.market_test_name,
+                                              postcommand=self._market_test_fill_list)
+        self.market_test_combo.grid(row=0, column=1, padx=2, pady=2, sticky="EW")
+        self._tip(self.market_test_combo, "Commodity to buy. The list shows what the market of the current station "
+                                          "sells (Market.json of the last opened market).")
+        ttk.Label(blk_market_test, text='Quantity (t):').grid(row=1, column=0, padx=2, pady=2, sticky="W")
+        self.market_test_qty = tk.StringVar(value="1")
+        spn_qty = ttk.Spinbox(blk_market_test, textvariable=self.market_test_qty, from_=1, to=9999, increment=1,
+                              width=8, justify=tk.RIGHT)
+        spn_qty.grid(row=1, column=1, padx=2, pady=2, sticky="W")
+        self._tip(spn_qty, "How many tons to buy. 1 t is enough to test the key sequences, use the full cargo "
+                           "capacity to test it like the trade route.")
+        self.market_test_sell = tk.BooleanVar(value=True)
+        ttk.Checkbutton(blk_market_test, text="Sell it again afterwards", variable=self.market_test_sell).grid(
+            row=2, column=0, columnspan=2, padx=2, pady=2, sticky="W")
+        self.checkboxvar['Market Test'] = tk.BooleanVar()
+        cb_market_test = ttk.Checkbutton(blk_market_test, text='Run Market Test', variable=self.checkboxvar['Market Test'],
+                                         command=(lambda field='Market Test': self.check_cb(field)))
+        cb_market_test.grid(row=3, column=0, columnspan=2, padx=2, pady=2, sticky="W")
+        self._tip(cb_market_test, "Opens the commodities market, buys the commodity once and (optionally) sells "
+                                  "it again - the same functions as the trade of Waypoint Assist. Every step is "
+                                  "checked and written to the log ('[Market test] OK/FAIL ...'). "
+                                  "Untick or STOP ALL to stop.")
+
         blk_debug_buttons = ttk.LabelFrame(page2, text="Debug Output", padding=(10, 5))
-        blk_debug_buttons.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="NSEW")
+        blk_debug_buttons.grid(row=2, column=0, padx=10, pady=5, sticky="NSEW")
         blk_debug_buttons.columnconfigure([0, 1], weight=1, minsize=100)
 
         self.checkboxvar['Debug Overlay'] = tk.BooleanVar()
@@ -1373,12 +1443,12 @@ class APGui:
         self._tip(cb_debug_overlay, self.tooltips['Debug Overlay'])
 
         self.checkboxvar['Debug OCR'] = tk.BooleanVar()
-        cb_debug_ocr = ttk.Checkbutton(blk_debug_buttons, text="Debug OCR - Writes OCR output to 'ocr-output' folder", variable=self.checkboxvar['Debug OCR'], command=(lambda field='Debug OCR': self.check_cb(field)))
+        cb_debug_ocr = ttk.Checkbutton(blk_debug_buttons, text="Debug OCR (writes 'ocr-output')", variable=self.checkboxvar['Debug OCR'], command=(lambda field='Debug OCR': self.check_cb(field)))
         cb_debug_ocr.grid(row=7, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
         self._tip(cb_debug_ocr, self.tooltips['Debug OCR'])
 
         self.checkboxvar['Debug Images'] = tk.BooleanVar()
-        cb_debug_images = ttk.Checkbutton(blk_debug_buttons, text="Debug Images - Writes debug images to 'debug-output' folder", variable=self.checkboxvar['Debug Images'], command=(lambda field='Debug Images': self.check_cb(field)))
+        cb_debug_images = ttk.Checkbutton(blk_debug_buttons, text="Debug Images (writes 'debug-output')", variable=self.checkboxvar['Debug Images'], command=(lambda field='Debug Images': self.check_cb(field)))
         cb_debug_images.grid(row=8, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
         self._tip(cb_debug_images, self.tooltips['Debug Images'])
 

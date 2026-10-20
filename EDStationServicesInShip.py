@@ -245,6 +245,8 @@ class CommoditiesMarket:
                     # the video of session 2026-10-20_16-57-51). Without the dialog only the list header is there.
                     'dialog_title': {'rect': [0.25, 0.185, 0.52, 0.240]}}
         self.last_select_failed = False  # the last buy/sell could not select the commodity in the list
+        self.last_select_info = ''  # how the last list selection was checked (for the market test)
+        self.last_dialog_info = ''  # what happened with the BUY/SELL dialog after the last transaction
         self.commodity_row_width = 422  # Buy/sell item width in pixels at 1920x1080
         self.commodity_row_height = 35  # Buy/sell item height in pixels at 1920x1080
 
@@ -307,16 +309,23 @@ class CommoditiesMarket:
         staying open (0/0, CANCEL selected, video 2026-10-19). UI_Back only if it is still open: a blind UI_Back
         leaves the market when the dialog is already closed. """
         sleep(1.0)
+        backs = 0
         for _ in range(2):
             state = self._dialog_open()
             if state:
                 logger.debug("Market dialog still open, closing it with UI_Back.")
                 keys.send('UI_Back')
+                backs += 1
                 sleep(0.8)
                 continue
             break
         if state is None:
             logger.debug("Market dialog state unknown (not readable), no UI_Back.")
+            self.last_dialog_info = "dialog state not readable, no UI_Back"
+        elif backs:
+            self.last_dialog_info = f"dialog stayed open, closed with {backs}x UI_Back"
+        else:
+            self.last_dialog_info = "dialog closed by the game"
 
     def _match_item(self, ocr_name: str, items: list) -> int | None:
         """ Index of the list item that best matches the OCR text, or None. """
@@ -341,26 +350,33 @@ class CommoditiesMarket:
         sleep(1.0)
         if index > 0:
             keys.send('UI_Down', hold=0.08, repeat=index, repeat_delay=0.12)
+        corrected = 0
         for attempt in range(4):
             sleep(0.7)
             cur = self._selected_commodity_name()
             if cur is None:
                 logger.debug(f"Market list: selected commodity not readable, using counted position for '{name}'.")
+                self.last_select_info = "name not readable, counted position used"
                 return True
             cur_i = self._match_item(cur, items)
             if cur_i is None:
                 if self._norm(name) in self._norm(cur):
+                    self.last_select_info = f"OCR confirmed ('{cur}')"
                     return True
                 # A text that is no commodity: are we still in the market? ('NEUTBAL'/'CORDIAI' were the
                 # reputation of the station menu, EDAP had left the market and opened the mission board.)
                 if self.in_station_menu():
                     self.ap_ckb('log', f"Market list: not in the commodities market (read '{cur}').")
+                    self.last_select_info = f"FAILED: not in the market (read '{cur}')"
                     return False
                 logger.debug(f"Market list: OCR '{cur}' does not match a list item, using counted position.")
+                self.last_select_info = f"OCR '{cur}' is no list item, counted position used"
                 return True
             if cur_i == index:
                 logger.debug(f"Market list: '{name}' selected (OCR '{cur}').")
+                self.last_select_info = f"OCR confirmed ('{cur}')" + (f", corrected {corrected}x" if corrected else "")
                 return True
+            corrected += 1
             delta = index - cur_i
             logger.info(f"Market list: '{items[cur_i]['Name_Localised']}' selected instead of '{name}', "
                         f"correcting by {delta:+d}.")
@@ -368,6 +384,7 @@ class CommoditiesMarket:
                 keys.send('UI_Down', hold=0.08, repeat=delta, repeat_delay=0.15)
             else:
                 keys.send('UI_Up', hold=0.08, repeat=-delta, repeat_delay=0.15)
+        self.last_select_info = "FAILED: could not reach the item after 4 corrections"
         return False
 
     def select_buy(self, keys) -> bool:
@@ -550,7 +567,9 @@ class CommoditiesMarket:
         act_qty = min(qty, qty_in_cargo)
 
         if index > -1:
+            self.last_select_failed = False
             if not self._goto_list_item(keys, sellable_items, index, name):
+                self.last_select_failed = True
                 self.ap_ckb('log+vce', f"Could not select {name} in the market list, not selling.")
                 return False, 0
 

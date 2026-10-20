@@ -1,3 +1,11 @@
+# 10/20/2026 v1.9.4 b30
+- New Market Test (Debug/Test tab): enter a commodity (the dropdown lists what the last opened market sells) and a
+  quantity, tick 'Run Market Test'. EDAP opens the commodities market of the station you are docked at, buys the
+  commodity once and optionally sells it again, using the same functions as the trade of Waypoint Assist. Every
+  step is checked and logged as '[Market test] OK/FAIL/INFO ...': market opened, BUY/SELL selected, commodity
+  found in the list (OCR confirmed / counted position / failed), cargo before -> after, what happened with the
+  dialog, still in the market. Summary at the end. Untick or STOP ALL stops it.
+
 # 10/20/2026 v1.9.4 b29 (video analysis of session 2026-10-20_16-57-51)
 - FIX trade: after a sale/purchase the game now closes the BUY/SELL dialog itself. The UI_Back added in b24 then
   left the commodities market, the following 'select BUY' keys opened the MISSION BOARD in the station menu and

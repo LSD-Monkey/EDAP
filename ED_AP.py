@@ -190,6 +190,8 @@ class EDAutopilot:
         self.robigo_assist_enabled = False
         self.dss_assist_enabled = False
         self.single_waypoint_enabled = False
+        self.market_test_enabled = False
+        self._market_test_params = ('', 1, True)
 
         # Create instance of each of the needed Classes
         self.scr = Screen.Screen(cb)
@@ -3466,6 +3468,14 @@ class EDAutopilot:
         self._single_waypoint_station = station
         self.single_waypoint_enabled = enable
 
+    def set_market_test(self, name: str, qty: int, sell_back: bool, enable=True):
+        """ Market test (Debug/Test tab): buy a commodity once and sell it again. """
+        if not enable and self.market_test_enabled:
+            if self.ap_thread is not None and self.ap_thread.is_alive():
+                self.ctype_async_raise(self.ap_thread, EDAP_Interrupt)
+        self._market_test_params = (name, qty, sell_back)
+        self.market_test_enabled = enable
+
     def set_cv_view(self, enable=True, x=0, y=0):
         self.cv_view = enable
         self.config['Enable_CV_View'] = int(self.cv_view)  # update the config
@@ -3568,7 +3578,7 @@ class EDAutopilot:
     def _any_assist_active(self) -> bool:
         return bool(self.fsd_assist_enabled or self.sc_assist_enabled or self.waypoint_assist_enabled or
                     self.robigo_assist_enabled or self.afk_combat_assist_enabled or self.dss_assist_enabled or
-                    self.single_waypoint_enabled)
+                    self.single_waypoint_enabled or self.market_test_enabled)
 
     def _journal_tail_game_state(self) -> str:
         """ Last game state in the current journal ('in_game', 'main_menu', 'shutdown'). Reads only the end of the
@@ -3914,6 +3924,23 @@ class EDAutopilot:
             self.single_waypoint_enabled = False
             self.ap_ckb('single_waypoint_stop')
             self.update_overlay()
+
+        elif self.market_test_enabled:
+            from EDMarketTest import MarketTest
+            name, qty, sell_back = self._market_test_params
+            set_focus_elite_window()
+            try:
+                MarketTest(self).run(name, qty, sell_back)
+            except EDAP_Interrupt:
+                logger.debug("Stopping Market test")
+                self.ap_ckb('log', "Market test stopped.")
+                self._release_keys_safe()
+            except Exception as e:
+                logger.exception("Market test failed")
+                self.ap_ckb('log', "Market test stopped with error: " + str(e))
+            self.market_test_enabled = False
+            self.update_ap_status("Idle")
+            self.ap_ckb('market_test_stop')
 
         # Check once EDAPGUI loaded to prevent errors logging to the listbox before loaded
         if self.gui_loaded:
