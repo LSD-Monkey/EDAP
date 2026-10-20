@@ -799,9 +799,10 @@ class EDWayPoint:
                                                    f"attempts. Stopping Waypoint Assist.")
                             _abort = True
                             break
+                        delay = float(self.ap.config.get('WaypointRestartDelay', 10))
                         self.ap_ckb('log+vce', f"Could not reach {next_wp_station}, attempt {station_fail_cnt} of "
-                                               f"{max_station_fails}. Trying again in 10 seconds.")
-                        sleep(10)
+                                               f"{max_station_fails}. Trying again in {delay:.0f} seconds.")
+                        sleep(delay)
                     continue
                 else:
                     self.ap_ckb('log+vce', f"Arrived at target System: {next_wp_system}")

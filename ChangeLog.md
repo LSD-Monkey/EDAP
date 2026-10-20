@@ -1,3 +1,23 @@
+# 10/20/2026 v1.9.4 b28 - GUI rework
+- Main tab: MODE list with a STOP ALL button and a live STATUS panel (running assist, activity, run time, system /
+  station, ship, fuel bar, cargo, waypoint file and next waypoint, jumps). Log with auto-scroll on/off, Clear and
+  Open log file; the log list keeps max. 5000 lines (long sessions made the GUI slow). The run time of an assist
+  is logged when it stops.
+- New Ship tab: SunPitchUp time, roll/pitch/yaw auto-tune with short instructions, throttle and 'Align to Target'
+  test buttons, rate curve editor.
+- New Settings tab built from one settings table (EDAPSettingsTab.py): 10 sections, search field, tooltip with the
+  default value for every setting, marker for values that differ from the default, 'Reset section', changes are
+  active at once ('Save All Settings *' shows unsaved changes, closing asks to save). Hotkey fields are applied
+  when the field is left (no half typed hotkeys), invalid hotkeys are reported instead of breaking the others.
+- Many settings that could only be changed in AP.json are now in the GUI: all Supercruise Assist, docking,
+  departure, Waypoint Assist and safety settings, language, OCR, galaxy map delay.
+- New settings: 'SCAssistMaxActivations' (5), 'WaypointRestartDelay' (10 s), 'RandomnessScale' (1.0).
+- Waypoint Assist asks for a waypoint file when none is loaded instead of starting and stopping at once.
+- 'Load All Settings' now really reloads AP.json (before only the ship configs).
+- FIX: every click on a mode checkbox saved AP.json (CV view handling) and set the log level again.
+- AP.json defaults are defined once (EDAutopilot.default_config()), missing entries get their default automatically.
+- docs/Settings.md generated from the settings table.
+
 # 10/20/2026 v1.9.4 b27 (log analysis 2026-10-20: 43 min productive, then 3 h stuck)
 - In-game SC Assist: throttle 50 % after the SCA is activated (and aligned). With throttle 0 the SCA sometimes
   never started (distance stayed at 76.8 Ls for 13 minutes).

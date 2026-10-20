@@ -41,6 +41,11 @@ from EDAPColonizeEditor import ColonizeEditorTab
 # from EDJournal import *
 from ED_AP import *
 from EDAPWaypointEditor import WaypointEditorTab
+from EDAPSettingsTab import SettingsTab
+import json
+import os
+import time
+from datetime import datetime
 
 from EDlogger import logger
 from Screen import set_focus_elite_window
@@ -122,9 +127,9 @@ class APGui:
             'FSD Route Assist': "Will execute your route. \nAt each jump the sequence will perform some fuel scooping.",
             'Supercruise Assist': "Will keep your ship pointed to target, \nyou target can only be a station for the autodocking to work.",
             'Waypoint Assist': "When selected, will prompt for the waypoint file. \nThe waypoint file contains System names that \nwill be entered into Galaxy Map and route plotted.",
-            'Robigo Assist': "",
+            'Robigo Assist': "Robigo passenger mission loop (Robigo Mines / Sirius Atmospherics).",
             'DSS Assist': "When selected, will perform DSS scans while you are traveling between stars.",
-            'Single Waypoint Assist': "",
+            'Single Waypoint Assist': "Fly to the system and/or station entered above (test of a single waypoint).",
             'ELW Scanner': "Will perform FSS scans while FSD Assist is traveling between stars. \nIf the FSS shows a signal in the region of Earth, \nWater or Ammonia type worlds, it will announce that discovery.",
             'AFK Combat Assist': "Used with a AFK Combat ship in a Rez Zone.",
             'RollRate': "Roll rate your ship has in deg/sec. Higher the number the more maneuverable the ship.",
@@ -188,6 +193,15 @@ class APGui:
         self.waypoint_editor_tab = None
         self.colonize_tab = None
         self._nb = None
+        self._active_mode = None  # name of the running assist (for the status panel)
+        self._session_start = None  # time the running assist was started
+        self._status_text = "Idle"
+        self._jump_text = ""
+        self._settings_dirty = False
+        self.settings_tab = None
+        self.btn_save = None
+        self.autoscroll_var = None
+        self.live = {}
 
         self.FSD_A_running = False
         self.SC_A_running = False
@@ -195,72 +209,18 @@ class APGui:
         self.RO_A_running = False
         self.DSS_A_running = False
         self.SWP_A_running = False
+        self.AFK_A_running = False
 
         self.cv_view = False
 
         self.msgList = self.gui_gen(root)
 
-        self.checkboxvar['Enable Randomness'].set(self.ed_ap.config['EnableRandomness'])
-        self.checkboxvar['Activate Elite for each key'].set(self.ed_ap.config['ActivateEliteEachKey'])
-        self.checkboxvar['Automatic logout'].set(self.ed_ap.config['AutomaticLogout'])
-        self.checkboxvar['Enable Overlay'].set(self.ed_ap.config['OverlayTextEnable'])
-        self.checkboxvar['Enable Voice'].set(self.ed_ap.config['VoiceEnable'])
-        self.checkboxvar['ELW Scanner'].set(self.ed_ap.config['ElwScannerEnable'])
-        self.checkboxvar['Enable Hotkeys'].set(self.ed_ap.config['HotkeysEnable'])
         self.checkboxvar['Debug Overlay'].set(self.ed_ap.config['DebugOverlay'])
         self.checkboxvar['Debug OCR'].set(self.ed_ap.config['DebugOCR'])
         self.checkboxvar['Debug Images'].set(self.ed_ap.config['DebugImages'])
-        self.checkboxvar['AFKCombat AttackAtWill'].set(self.ed_ap.config['AFKCombat_AttackAtWill'])
-
-        self.radiobuttonvar['dss_button'].set(self.ed_ap.config['DSSButton'])
 
         self.entries['ship']['SunPitchUp+Time'].delete(0, tk.END)
-
-        self.entries['autopilot']['Sun Bright Threshold'].delete(0, tk.END)
-        self.entries['autopilot']['Nav Align Tries'].delete(0, tk.END)
-        self.entries['autopilot']['Jump Tries'].delete(0, tk.END)
-        self.entries['autopilot']['Docking Retries'].delete(0, tk.END)
-        self.entries['autopilot']['Wait For Autodock'].delete(0, tk.END)
-
-        self.entries['refuel']['Refuel Threshold'].delete(0, tk.END)
-        self.entries['refuel']['Scoop Timeout'].delete(0, tk.END)
-        self.entries['refuel']['Fuel Threshold Abort'].delete(0, tk.END)
-
-        self.entries['overlay']['X Offset'].delete(0, tk.END)
-        self.entries['overlay']['Y Offset'].delete(0, tk.END)
-        self.entries['overlay']['Font Size'].delete(0, tk.END)
-
-        self.entries['buttons']['Start FSD'].delete(0, tk.END)
-        self.entries['buttons']['Start SC'].delete(0, tk.END)
-        self.entries['buttons']['Start Robigo'].delete(0, tk.END)
-        self.entries['buttons']['Stop All'].delete(0, tk.END)
-
-        self.entries['keys']['Modifier Key Delay'].delete(0, tk.END)
-        self.entries['keys']['Default Hold Time'].delete(0, tk.END)
-        self.entries['keys']['Repeat Key Delay'].delete(0, tk.END)
-
         self.entries['ship']['SunPitchUp+Time'].insert(0, float(self.ed_ap.sunpitchuptime))
-
-        self.entries['autopilot']['Sun Bright Threshold'].insert(0, int(self.ed_ap.config['SunBrightThreshold']))
-        self.entries['autopilot']['Nav Align Tries'].insert(0, int(self.ed_ap.config['NavAlignTries']))
-        self.entries['autopilot']['Jump Tries'].insert(0, int(self.ed_ap.config['JumpTries']))
-        self.entries['autopilot']['Docking Retries'].insert(0, int(self.ed_ap.config['DockingRetries']))
-        self.entries['autopilot']['Wait For Autodock'].insert(0, int(self.ed_ap.config['WaitForAutoDockTimer']))
-        self.entries['refuel']['Refuel Threshold'].insert(0, int(self.ed_ap.config['RefuelThreshold']))
-        self.entries['refuel']['Scoop Timeout'].insert(0, int(self.ed_ap.config['FuelScoopTimeOut']))
-        self.entries['refuel']['Fuel Threshold Abort'].insert(0, int(self.ed_ap.config['FuelThreasholdAbortAP']))
-        self.entries['overlay']['X Offset'].insert(0, int(self.ed_ap.config['OverlayTextXOffset']))
-        self.entries['overlay']['Y Offset'].insert(0, int(self.ed_ap.config['OverlayTextYOffset']))
-        self.entries['overlay']['Font Size'].insert(0, int(self.ed_ap.config['OverlayTextFontSize']))
-
-        self.entries['buttons']['Start FSD'].insert(0, str(self.ed_ap.config['HotKey_StartFSD']))
-        self.entries['buttons']['Start SC'].insert(0, str(self.ed_ap.config['HotKey_StartSC']))
-        self.entries['buttons']['Start Robigo'].insert(0, str(self.ed_ap.config['HotKey_StartRobigo']))
-        self.entries['buttons']['Stop All'].insert(0, str(self.ed_ap.config['HotKey_StopAllAssists']))
-
-        self.entries['keys']['Modifier Key Delay'].insert(0, float(self.ed_ap.config['Key_ModDelay']))
-        self.entries['keys']['Default Hold Time'].insert(0, float(self.ed_ap.config['Key_DefHoldTime']))
-        self.entries['keys']['Repeat Key Delay'].insert(0, float(self.ed_ap.config['Key_RepeatDelay']))
 
         if self.ed_ap.config['LogDEBUG']:
             self.radiobuttonvar['debug_mode'].set("Debug")
@@ -282,6 +242,9 @@ class APGui:
         # Send a log entry which will flush out the buffer.
         self.callback('log', 'ED Autopilot loaded successfully.')
 
+        # Live status panel on the main tab
+        self.root.after(1000, self._update_live_panel)
+
     def setup_hotkeys(self):
         """ Enable or disable hotkeys.
         Global trap for these keys, the 'end' key will stop any current AP action the 'home' key will start the
@@ -292,11 +255,16 @@ class APGui:
         keyboard.remove_all_hotkeys()
 
         if self.ed_ap.config['HotkeysEnable']:
-            # Add the desired hotkeys
-            keyboard.add_hotkey(self.ed_ap.config['HotKey_StopAllAssists'], self.callback, args=('stop_all_assists', None))
-            keyboard.add_hotkey(self.ed_ap.config['HotKey_StartFSD'], self.callback, args=('fsd_start', None))
-            keyboard.add_hotkey(self.ed_ap.config['HotKey_StartSC'], self.callback, args=('sc_start', None))
-            keyboard.add_hotkey(self.ed_ap.config['HotKey_StartRobigo'], self.callback, args=('robigo_start', None))
+            # Add the desired hotkeys. An invalid key name must not break the other hotkeys.
+            for cfg_key, msg in (('HotKey_StopAllAssists', 'stop_all_assists'), ('HotKey_StartFSD', 'fsd_start'),
+                                 ('HotKey_StartSC', 'sc_start'), ('HotKey_StartRobigo', 'robigo_start')):
+                hotkey = str(self.ed_ap.config.get(cfg_key, '')).strip()
+                if not hotkey:
+                    continue
+                try:
+                    keyboard.add_hotkey(hotkey, self.callback, args=(msg, None))
+                except Exception as e:
+                    self.log_msg(f"Hotkey '{hotkey}' ({cfg_key}) is not valid: {e}")
 
             # TODO - Enable these to allow pips to be controlled by EDAP when using the defined keys (tbd).
             # keyboard.add_hotkey('up', self.callback, args=('up', None))
@@ -467,6 +435,12 @@ class APGui:
 
     def close_window(self):
         logger.debug("Entered: close_window")
+        if self._settings_dirty:
+            ans = messagebox.askyesnocancel("EDAP", "There are unsaved settings. Save them before closing?")
+            if ans is None:
+                return
+            if ans:
+                self.save_settings()
         self.stop_fsd()
         self.stop_sc()
         self.ed_ap.quit()
@@ -652,7 +626,7 @@ class APGui:
                     while not self.log_buffer.empty():
                         self.msgList.insert(tk.END, self.log_buffer.get())
                     self.msgList.insert(tk.END, message)
-                    self.msgList.yview(tk.END)
+                    self._log_trim_and_scroll()
                 else:
                     self.log_buffer.put(message)
             except Exception:
@@ -670,22 +644,104 @@ class APGui:
                     self.msgList.insert(tk.END, self.log_buffer.get())
 
                 self.msgList.insert(tk.END, message)
-                self.msgList.yview(tk.END)
+                self._log_trim_and_scroll()
                 logger.info(msg)
         except:
             # Store message in queue
             self.log_buffer.put(message)
             logger.info(msg)
 
+    def _log_trim_and_scroll(self):
+        """ Keeps the log list at max. 5000 lines (a long session made the GUI slow) and scrolls to the end. """
+        size = self.msgList.size()
+        if size > 5000:
+            self.msgList.delete(0, size - 5000)
+        if self.autoscroll_var is None or self.autoscroll_var.get():
+            self.msgList.yview(tk.END)
+
     def set_statusbar(self, txt):
         self.statusbar.configure(text=txt)
 
     def update_jumpcount(self, txt):
+        self._jump_text = txt
         self.jumpcount.configure(text=txt)
 
     def update_statusline(self, txt):
+        self._status_text = txt
         self.status.configure(text="Status: " + txt)
         self.log_msg(f"Status update: {txt}")
+
+    # ------------------------------------------------------------------
+    # Live status panel (main tab)
+    # ------------------------------------------------------------------
+    def _read_status_json(self) -> dict:
+        try:
+            with open(self.ed_ap.status.file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _update_live_panel(self):
+        """ Updates the status panel once per second. Only reads data (no journal file access from this thread). """
+        try:
+            ship = getattr(self.ed_ap.jn, 'ship', {}) or {}
+            st = self._read_status_json()
+
+            mode = self._active_mode or "Idle"
+            self.live['mode'].configure(text=mode, foreground="#57c26a" if self._active_mode else "#9a9a9a")
+            self.live['status'].configure(text=self._status_text or "-")
+            if self._session_start:
+                self.live['runtime'].configure(text=self._fmt_duration(time.time() - self._session_start))
+            else:
+                self.live['runtime'].configure(text="-")
+
+            system = ship.get('cur_star_system') or '-'
+            station = ship.get('cur_station') or ''
+            flags = st.get('Flags', 0) or 0
+            docked = bool(flags & 1)
+            self.live['location'].configure(text=f"{system}" + (f"  /  {station} (docked)" if docked and station else ""))
+
+            ship_type = ship.get('type') or '-'
+            self.live['ship'].configure(text=str(ship_type).replace('_', ' ').title())
+
+            cap = ship.get('fuel_capacity')
+            fuel = (st.get('Fuel') or {}).get('FuelMain', ship.get('fuel_level'))
+            if fuel is not None and cap:
+                pct = max(0.0, min(100.0, 100.0 * float(fuel) / float(cap)))
+                self.live['fuel_bar'].configure(value=pct)
+                self.live['fuel'].configure(text=f"{float(fuel):.1f} / {float(cap):.0f} t  ({pct:.0f}%)")
+            else:
+                self.live['fuel_bar'].configure(value=0)
+                self.live['fuel'].configure(text="-")
+
+            cargo = st.get('Cargo')
+            cargo_cap = ship.get('cargo_capacity')
+            if cargo is not None:
+                self.live['cargo'].configure(text=f"{int(cargo)} / {cargo_cap if cargo_cap else '?'} t")
+            else:
+                self.live['cargo'].configure(text="-")
+
+            wp = self.ed_ap.waypoint
+            if wp.waypoints:
+                name = os.path.basename(wp.filename) if wp.filename else "(not saved)"
+                keys = [k for k in wp.waypoints if k != 'GlobalShoppingList']
+                step_txt = ""
+                if self._active_mode == 'Waypoint Assist' and 0 <= wp.step < len(list(wp.waypoints)):
+                    key = list(wp.waypoints)[wp.step]
+                    w = wp.waypoints.get(key, {})
+                    step_txt = f"  -  next: {w.get('SystemName', '')} / {w.get('StationName', '')}"
+                self.live['waypoints'].configure(text=f"{name} ({len(keys)} entries){step_txt}")
+            else:
+                self.live['waypoints'].configure(text="no file loaded")
+
+            self.live['jumps'].configure(text=self._jump_text or "-")
+        except Exception as e:
+            logger.debug(f"live panel update failed: {e}")
+        finally:
+            self.root.after(1000, self._update_live_panel)
+
+    def clear_log(self):
+        self.msgList.delete(0, tk.END)
 
     def _assist_running(self) -> bool:
         ap = self.ed_ap
@@ -789,16 +845,32 @@ class APGui:
         self.ed_ap.update_config()
         self.ed_ap.update_ship_configs()
         self.calibration.save_ocr_calibration_data()
+        if self.settings_tab is not None:
+            self.settings_tab.mark_saved()
         self.log_msg("Saved all settings.")
 
     def load_settings(self):
+        """ Reloads AP.json and the ship configs from disk (discards unsaved changes). """
+        if self._settings_dirty and not messagebox.askyesno(
+                "Load settings", "Discard the unsaved changes and load the settings from disk?"):
+            return
+        self.ed_ap.load_config()
+        self.ed_ap.process_config_settings()
         self.ed_ap.load_ship_configs()
+        if self.settings_tab is not None:
+            self.settings_tab.config = self.ed_ap.config  # load_config() created a new dict
+            self.settings_tab.reload()
+            self.settings_tab.mark_saved()
+        self.setup_hotkeys()
+        self.log_msg("Loaded all settings from disk.")
 
     def open_help(self):
         # Determine the active Tab
         tab_text = self._nb.tab(self._nb.select(), "text")
 
-        if tab_text == "Main":
+        if tab_text == "Ship":
+            webbrowser.open_new("https://github.com/SumZer0-git/EDAPGui/blob/main/docs/RollPitchYaw.md")
+        elif tab_text == "Main":
             webbrowser.open_new("https://github.com/SumZer0-git/EDAPGui/blob/main/docs/Main.md")
         elif tab_text == "Settings":
             webbrowser.open_new("https://github.com/SumZer0-git/EDAPGui/blob/main/docs/Settings.md")
@@ -818,232 +890,181 @@ class APGui:
 
 
     def entry_update(self, event):
-        """
-        # new data was added to a field, re-read them all for simple logic
+        """ Reads the remaining entry fields (ship tab). All other settings are applied by the settings tab at once.
         @param event: A dummy argument required the calling function.
-        @return: Nothing
         """
         try:
             self.ed_ap.sunpitchuptime = float(self.entries['ship']['SunPitchUp+Time'].get())
+        except ValueError:
+            messagebox.showinfo("EDAP", "SunPitchUp Time: please enter a number.")
+            return
+        self.ed_ap.config['AutoTuneRPYRates'] = self.checkboxvar['Enable Auto-tune RPY'].get()
+        self.ed_ap.process_config_settings()
 
-            self.ed_ap.config['SunBrightThreshold'] = int(self.entries['autopilot']['Sun Bright Threshold'].get())
-            self.ed_ap.config['NavAlignTries'] = int(self.entries['autopilot']['Nav Align Tries'].get())
-            self.ed_ap.config['JumpTries'] = int(self.entries['autopilot']['Jump Tries'].get())
-            self.ed_ap.config['DockingRetries'] = int(self.entries['autopilot']['Docking Retries'].get())
-            self.ed_ap.config['WaitForAutoDockTimer'] = int(self.entries['autopilot']['Wait For Autodock'].get())
-            self.ed_ap.config['RefuelThreshold'] = int(self.entries['refuel']['Refuel Threshold'].get())
-            self.ed_ap.config['FuelScoopTimeOut'] = int(self.entries['refuel']['Scoop Timeout'].get())
-            self.ed_ap.config['FuelThreasholdAbortAP'] = int(self.entries['refuel']['Fuel Threshold Abort'].get())
-            self.ed_ap.config['OverlayTextXOffset'] = int(self.entries['overlay']['X Offset'].get())
-            self.ed_ap.config['OverlayTextYOffset'] = int(self.entries['overlay']['Y Offset'].get())
-            self.ed_ap.config['OverlayTextFontSize'] = int(self.entries['overlay']['Font Size'].get())
-            self.ed_ap.config['HotKey_StartFSD'] = str(self.entries['buttons']['Start FSD'].get())
-            self.ed_ap.config['HotKey_StartSC'] = str(self.entries['buttons']['Start SC'].get())
-            self.ed_ap.config['HotKey_StartRobigo'] = str(self.entries['buttons']['Start Robigo'].get())
-            self.ed_ap.config['HotKey_StopAllAssists'] = str(self.entries['buttons']['Stop All'].get())
-            self.ed_ap.config['VoiceEnable'] = self.checkboxvar['Enable Voice'].get()
-            self.ed_ap.config['ElwScannerEnable'] = self.checkboxvar['ELW Scanner'].get()
-            self.ed_ap.config['DebugOverlay'] = self.checkboxvar['Debug Overlay'].get()
-            self.ed_ap.config['AFKCombat_AttackAtWill'] = self.checkboxvar['AFKCombat AttackAtWill'].get()
-            self.ed_ap.config['HotkeysEnable'] = self.checkboxvar['Enable Hotkeys'].get()
-            self.ed_ap.config['DebugOCR'] = self.checkboxvar['Debug OCR'].get()
-            self.ed_ap.config['DebugImages'] = self.checkboxvar['Debug Images'].get()
-            self.ed_ap.config['Key_ModDelay'] = float(self.entries['keys']['Modifier Key Delay'].get())
-            self.ed_ap.config['Key_DefHoldTime'] = float(self.entries['keys']['Default Hold Time'].get())
-            self.ed_ap.config['Key_RepeatDelay'] = float(self.entries['keys']['Repeat Key Delay'].get())
-            self.ed_ap.config['AutoTuneRPYRates'] = self.checkboxvar['Enable Auto-tune RPY'].get()
+    def on_setting_change(self, key, value):
+        """ Called by the settings tab after a value was changed: apply it at once. """
+        ap = self.ed_ap
+        if key == 'EnableRandomness':
+            ap.set_randomness(value)
+        elif key == 'ActivateEliteEachKey':
+            ap.set_activate_elite_eachkey(value)
+            ap.keys.activate_window = value
+        elif key == 'AutomaticLogout':
+            ap.set_automatic_logout(value)
+        elif key == 'OverlayTextEnable':
+            ap.set_overlay(value)
+        elif key == 'VoiceEnable':
+            ap.set_voice(value)
+        elif key == 'ElwScannerEnable':
+            ap.set_fss_scan(value)
+        elif key == 'HotkeysEnable' or key.startswith('HotKey_'):
+            self.setup_hotkeys()
+        elif key in ('Language', 'OCRLanguage', 'OCRMobile'):
+            self.log_msg(f"'{key}' changed to '{value}'. Save the settings and restart EDAP to use it.")
+        ap.process_config_settings()
 
-            # Process config[] settings to update classes as necessary
-            self.ed_ap.process_config_settings()
-        except:
-            messagebox.showinfo("Exception", "Invalid float entered")
+    def on_settings_dirty(self, dirty: bool):
+        self._settings_dirty = dirty
+        if self.btn_save is not None:
+            self.btn_save.configure(text='Save All Settings *' if dirty else 'Save All Settings')
+
+    # Assist modes: checkbox name -> (start function, stop function, running flag attribute)
+    MODE_FIELDS = ('FSD Route Assist', 'Supercruise Assist', 'Waypoint Assist', 'Robigo Assist',
+                   'AFK Combat Assist', 'DSS Assist')
+
+    def _mode_funcs(self, field):
+        return {
+            'FSD Route Assist': (self.start_fsd, self.stop_fsd, 'FSD_A_running'),
+            'Supercruise Assist': (self.start_sc, self.stop_sc, 'SC_A_running'),
+            'Waypoint Assist': (self.start_waypoint, self.stop_waypoint, 'WP_A_running'),
+            'Robigo Assist': (self.start_robigo, self.stop_robigo, 'RO_A_running'),
+            'AFK Combat Assist': (self.start_afk, self.stop_afk, 'AFK_A_running'),
+            'DSS Assist': (self.start_dss, self.stop_dss, 'DSS_A_running'),
+        }[field]
+
+    def _set_other_modes_state(self, field, state: str):
+        """ Only one assist can run: the other mode checkboxes are disabled while one runs. """
+        for other in self.MODE_FIELDS:
+            if other != field and other in self.lab_ck:
+                self.lab_ck[other].config(state=state)
 
     def check_cb(self, field):
         """ Check checkbox
             ckbox.state:(ACTIVE | DISABLED)
-            ('FSD Route Assist', 'Supercruise Assist', 'Enable Voice', 'Enable CV View')
         """
-        # print("got event:",  checkboxvar['FSD Route Assist'].get(), " ", str(FSD_A_running))
-        if field == 'FSD Route Assist':
-            if self.checkboxvar['FSD Route Assist'].get() == 1 and self.FSD_A_running == False:
-                self.lab_ck['AFK Combat Assist'].config(state='disabled')
-                self.lab_ck['Supercruise Assist'].config(state='disabled')
-                self.lab_ck['Waypoint Assist'].config(state='disabled')
-                self.lab_ck['Robigo Assist'].config(state='disabled')
-                self.lab_ck['DSS Assist'].config(state='disabled')
-                self.start_fsd()
+        if field in self.MODE_FIELDS:
+            start, stop, flag = self._mode_funcs(field)
+            checked = self.checkboxvar[field].get() == 1
+            running = getattr(self, flag, False)
+            if checked and not running:
+                if field == 'Waypoint Assist' and not self._ensure_waypoint_file():
+                    self.checkboxvar[field].set(0)
+                    return
+                self._set_other_modes_state(field, 'disabled')
+                start()
+                self._mode_started(field)
+            elif not checked and running:
+                stop()
+                self._set_other_modes_state(field, 'normal')
+                self._mode_stopped(field)
+            return
 
-            elif self.checkboxvar['FSD Route Assist'].get() == 0 and self.FSD_A_running == True:
-                self.stop_fsd()
-                self.lab_ck['Supercruise Assist'].config(state='active')
-                self.lab_ck['AFK Combat Assist'].config(state='active')
-                self.lab_ck['Waypoint Assist'].config(state='active')
-                self.lab_ck['Robigo Assist'].config(state='active')
-                self.lab_ck['DSS Assist'].config(state='active')
+        if field == 'Enable CV View':
+            if self.checkboxvar['Enable CV View'].get() == 1:
+                self.cv_view = True
+                x = self.root.winfo_x() + self.root.winfo_width() + 4
+                y = self.root.winfo_y()
+                self.ed_ap.set_cv_view(True, x, y)
+            else:
+                self.cv_view = False
+                self.ed_ap.set_cv_view(False)
 
-        if field == 'Supercruise Assist':
-            if self.checkboxvar['Supercruise Assist'].get() == 1 and self.SC_A_running == False:
-                self.lab_ck['FSD Route Assist'].config(state='disabled')
-                self.lab_ck['AFK Combat Assist'].config(state='disabled')
-                self.lab_ck['Waypoint Assist'].config(state='disabled')
-                self.lab_ck['Robigo Assist'].config(state='disabled')
-                self.lab_ck['DSS Assist'].config(state='disabled')
-                self.start_sc()
-
-            elif self.checkboxvar['Supercruise Assist'].get() == 0 and self.SC_A_running == True:
-                self.stop_sc()
-                self.lab_ck['FSD Route Assist'].config(state='active')
-                self.lab_ck['AFK Combat Assist'].config(state='active')
-                self.lab_ck['Waypoint Assist'].config(state='active')
-                self.lab_ck['Robigo Assist'].config(state='active')
-                self.lab_ck['DSS Assist'].config(state='active')
-
-        if field == 'Waypoint Assist':
-            if self.checkboxvar['Waypoint Assist'].get() == 1 and self.WP_A_running == False:
-                self.lab_ck['FSD Route Assist'].config(state='disabled')
-                self.lab_ck['Supercruise Assist'].config(state='disabled')
-                self.lab_ck['AFK Combat Assist'].config(state='disabled')
-                self.lab_ck['Robigo Assist'].config(state='disabled')
-                self.lab_ck['DSS Assist'].config(state='disabled')
-                self.start_waypoint()
-
-            elif self.checkboxvar['Waypoint Assist'].get() == 0 and self.WP_A_running == True:
-                self.stop_waypoint()
-                self.lab_ck['FSD Route Assist'].config(state='active')
-                self.lab_ck['Supercruise Assist'].config(state='active')
-                self.lab_ck['AFK Combat Assist'].config(state='active')
-                self.lab_ck['Robigo Assist'].config(state='active')
-                self.lab_ck['DSS Assist'].config(state='active')
-
-        if field == 'Robigo Assist':
-            if self.checkboxvar['Robigo Assist'].get() == 1 and self.RO_A_running == False:
-                self.lab_ck['FSD Route Assist'].config(state='disabled')
-                self.lab_ck['Supercruise Assist'].config(state='disabled')
-                self.lab_ck['AFK Combat Assist'].config(state='disabled')
-                self.lab_ck['Waypoint Assist'].config(state='disabled')
-                self.lab_ck['DSS Assist'].config(state='disabled')
-                self.start_robigo()
-
-            elif self.checkboxvar['Robigo Assist'].get() == 0 and self.RO_A_running == True:
-                self.stop_robigo()
-                self.lab_ck['FSD Route Assist'].config(state='active')
-                self.lab_ck['Supercruise Assist'].config(state='active')
-                self.lab_ck['AFK Combat Assist'].config(state='active')
-                self.lab_ck['Waypoint Assist'].config(state='active')
-                self.lab_ck['DSS Assist'].config(state='active')
-
-        if field == 'AFK Combat Assist':
-            if self.checkboxvar['AFK Combat Assist'].get() == 1:
-                self.ed_ap.set_afk_combat_assist(True)
-                self.log_msg("AFK Combat Assist start")
-                self.lab_ck['FSD Route Assist'].config(state='disabled')
-                self.lab_ck['Supercruise Assist'].config(state='disabled')
-                self.lab_ck['Waypoint Assist'].config(state='disabled')
-                self.lab_ck['Robigo Assist'].config(state='disabled')
-                self.lab_ck['DSS Assist'].config(state='disabled')
-
-            elif self.checkboxvar['AFK Combat Assist'].get() == 0:
-                self.ed_ap.set_afk_combat_assist(False)
-                self.log_msg("AFK Combat Assist stop")
-                self.lab_ck['FSD Route Assist'].config(state='active')
-                self.lab_ck['Supercruise Assist'].config(state='active')
-                self.lab_ck['Waypoint Assist'].config(state='active')
-                self.lab_ck['Robigo Assist'].config(state='active')
-                self.lab_ck['DSS Assist'].config(state='active')
-
-        if field == 'DSS Assist':
-            if self.checkboxvar['DSS Assist'].get() == 1:
-                self.lab_ck['FSD Route Assist'].config(state='disabled')
-                self.lab_ck['AFK Combat Assist'].config(state='disabled')
-                self.lab_ck['Supercruise Assist'].config(state='disabled')
-                self.lab_ck['Waypoint Assist'].config(state='disabled')
-                self.lab_ck['Robigo Assist'].config(state='disabled')
-                self.start_dss()
-
-            elif self.checkboxvar['DSS Assist'].get() == 0:
-                self.stop_dss()
-                self.lab_ck['FSD Route Assist'].config(state='active')
-                self.lab_ck['Supercruise Assist'].config(state='active')
-                self.lab_ck['AFK Combat Assist'].config(state='active')
-                self.lab_ck['Waypoint Assist'].config(state='active')
-                self.lab_ck['Robigo Assist'].config(state='active')
-
-        if self.checkboxvar['Enable Randomness'].get():
-            self.ed_ap.set_randomness(True)
-        else:
-            self.ed_ap.set_randomness(False)
-
-        if self.checkboxvar['Activate Elite for each key'].get():
-            self.ed_ap.set_activate_elite_eachkey(True)
-            self.ed_ap.keys.activate_window = True
-        else:
-            self.ed_ap.set_activate_elite_eachkey(False)
-            self.ed_ap.keys.activate_window = False
-
-        if self.checkboxvar['Automatic logout'].get():
-            self.ed_ap.set_automatic_logout(True)
-        else:
-            self.ed_ap.set_automatic_logout(False)
-
-        if self.checkboxvar['Enable Overlay'].get():
-            self.ed_ap.set_overlay(True)
-        else:
-            self.ed_ap.set_overlay(False)
-
-        if self.checkboxvar['Enable Voice'].get():
-            self.ed_ap.set_voice(True)
-        else:
-            self.ed_ap.set_voice(False)
-
-        if self.checkboxvar['ELW Scanner'].get():
-            self.ed_ap.set_fss_scan(True)
-        else:
-            self.ed_ap.set_fss_scan(False)
-
-        if self.checkboxvar['Enable CV View'].get() == 1:
-            self.cv_view = True
-            x = self.root.winfo_x() + self.root.winfo_width() + 4
-            y = self.root.winfo_y()
-            self.ed_ap.set_cv_view(True, x, y)
-        else:
-            self.cv_view = False
-            self.ed_ap.set_cv_view(False)
-
-        self.ed_ap.config['DSSButton'] = self.radiobuttonvar['dss_button'].get()
-
-        if self.radiobuttonvar['debug_mode'].get() == "Error":
-            self.ed_ap.set_log_error(True)
-        elif self.radiobuttonvar['debug_mode'].get() == "Debug":
-            self.ed_ap.set_log_debug(True)
-        elif self.radiobuttonvar['debug_mode'].get() == "Info":
-            self.ed_ap.set_log_info(True)
+        if field == 'debug_mode':
+            if self.radiobuttonvar['debug_mode'].get() == "Error":
+                self.ed_ap.set_log_error(True)
+            elif self.radiobuttonvar['debug_mode'].get() == "Debug":
+                self.ed_ap.set_log_debug(True)
+            elif self.radiobuttonvar['debug_mode'].get() == "Info":
+                self.ed_ap.set_log_info(True)
 
         if field == 'Single Waypoint Assist':
             if self.checkboxvar['Single Waypoint Assist'].get() == 1 and self.SWP_A_running == False:
                 self.start_single_waypoint_assist()
+                if self.SWP_A_running:
+                    self._mode_started('Single Waypoint Assist')
+                else:
+                    self.checkboxvar['Single Waypoint Assist'].set(0)
             elif self.checkboxvar['Single Waypoint Assist'].get() == 0 and self.SWP_A_running == True:
                 self.stop_single_waypoint_assist()
+                self._mode_stopped('Single Waypoint Assist')
 
         if field == 'Debug Overlay':
-            if self.checkboxvar['Debug Overlay'].get():
-                self.ed_ap.debug_overlay = True
-            else:
-                self.ed_ap.debug_overlay = False
-
-        self.ed_ap.config['AFKCombat_AttackAtWill'] = self.checkboxvar['AFKCombat AttackAtWill'].get()
-
-        if field == 'Enable Hotkeys':
-            self.ed_ap.config['HotkeysEnable'] = self.checkboxvar['Enable Hotkeys'].get()
-            self.setup_hotkeys()
+            self.ed_ap.debug_overlay = bool(self.checkboxvar['Debug Overlay'].get())
+            self.ed_ap.config['DebugOverlay'] = self.ed_ap.debug_overlay
 
         if field == 'Debug OCR':
             self.ed_ap.debug_ocr = self.checkboxvar['Debug OCR'].get()
+            self.ed_ap.config['DebugOCR'] = bool(self.ed_ap.debug_ocr)
 
         if field == 'Debug Images':
             self.ed_ap.debug_images = self.checkboxvar['Debug Images'].get()
+            self.ed_ap.config['DebugImages'] = bool(self.ed_ap.debug_images)
 
         if field == 'Enable Auto-tune RPY':
             self.ed_ap.config['AutoTuneRPYRates'] = self.checkboxvar['Enable Auto-tune RPY'].get()
+            self.ed_ap.process_config_settings()
+
+    def _mode_started(self, field):
+        self._active_mode = field
+        self._session_start = time.time()
+        self._jump_text = ""
+
+    def _mode_stopped(self, field):
+        if self._active_mode == field:
+            if self._session_start:
+                self.log_msg(f"{field} ran for {self._fmt_duration(time.time() - self._session_start)}.")
+            self._active_mode = None
+            self._session_start = None
+
+    def _ensure_waypoint_file(self) -> bool:
+        """ Waypoint Assist needs a waypoint file. If none is loaded, ask for one. """
+        wp = self.ed_ap.waypoint
+        if wp.waypoints and len(wp.waypoints) > 0:
+            return True
+        initial = os.path.abspath('./waypoints')
+        filepath = fd.askopenfilename(title="Waypoint Assist: select a waypoint file", initialdir=initial,
+                                      filetypes=[("Waypoint files", "*.json"), ("All files", "*.*")])
+        if not filepath:
+            self.log_msg("Waypoint Assist not started: no waypoint file selected.")
+            return False
+        try:
+            if self.waypoint_editor_tab is not None:
+                self.waypoint_editor_tab.editor_load_waypoint_file(filepath)
+            else:
+                wp.load_waypoint_file(filepath)
+        except Exception as e:
+            self.log_msg(f"Could not load the waypoint file: {e}")
+            return False
+        if not wp.waypoints:
+            self.log_msg("The waypoint file is empty or invalid.")
+            return False
+        return True
+
+    def start_afk(self):
+        self.ed_ap.set_afk_combat_assist(True)
+        self.AFK_A_running = True
+        self.log_msg("AFK Combat Assist start")
+
+    def stop_afk(self):
+        self.ed_ap.set_afk_combat_assist(False)
+        self.AFK_A_running = False
+        self.log_msg("AFK Combat Assist stop")
+        self.update_statusline("Idle")
+
+    @staticmethod
+    def _fmt_duration(secs: float) -> str:
+        secs = int(max(0, secs))
+        return f"{secs // 3600:d}:{secs % 3600 // 60:02d}:{secs % 60:02d}"
 
     def makeform(self, win: ttk.LabelFrame, f_type: int, fields, r: int = 0, inc: float = 1, r_from: float = 0,
                  rto: float = 1000):
@@ -1073,53 +1094,55 @@ class APGui:
             r += 1
         return entries
 
+    def _tip(self, widget, text):
+        if text:
+            ToolTip(widget, msg=text, delay=0.6, bg="#808080", fg="#FFFFFF")
+
     def gui_gen(self, win):
 
-        modes_check_fields = ('FSD Route Assist', 'Supercruise Assist', 'Waypoint Assist', 'Robigo Assist', 'AFK Combat Assist', 'DSS Assist')
-        autopilot_entry_fields = ('Sun Bright Threshold', 'Nav Align Tries', 'Jump Tries', 'Docking Retries', 'Wait For Autodock')
-        buttons_entry_fields = ('Start FSD', 'Start SC', 'Start Robigo', 'Stop All')
-        refuel_entry_fields = ('Refuel Threshold', 'Scoop Timeout', 'Fuel Threshold Abort')
-        overlay_entry_fields = ('X Offset', 'Y Offset', 'Font Size')
-        keys_entry_fields = ('Modifier Key Delay', 'Default Hold Time', 'Repeat Key Delay')
+        modes_check_fields = self.MODE_FIELDS
 
-        # notebook pages
+        # ---- top bar ---------------------------------------------------------------------------------------------
         blk_top_buttons = ttk.Frame(win)
         blk_top_buttons.grid(row=0, column=0, padx=10, pady=5, sticky="EW")
-        blk_top_buttons.columnconfigure(0)
-        blk_top_buttons.columnconfigure(1, weight=1)
+        blk_top_buttons.columnconfigure(2, weight=1)
 
         btn_load = ttk.Button(blk_top_buttons, text='Load All Settings', command=self.load_settings)
         btn_load.grid(row=0, column=0, padx=5, pady=5, sticky="W")
-        btn_save = ttk.Button(blk_top_buttons, text='Save All Settings', command=self.save_settings, style="Accent.TButton")
-        btn_save.grid(row=0, column=1, padx=2, pady=5, sticky="W")
-        ttk.Button(blk_top_buttons, text="Online HELP", command=self.open_help, style="Accent.TButton").grid(row=0, column=2, padx=5, pady=10, sticky=tk.E)
+        self._tip(btn_load, "Reload AP.json and the ship configs from disk (discards unsaved changes).")
+        self.btn_save = ttk.Button(blk_top_buttons, text='Save All Settings', command=self.save_settings,
+                                   style="Accent.TButton")
+        self.btn_save.grid(row=0, column=1, padx=2, pady=5, sticky="W")
+        self._tip(self.btn_save, "Write all settings, ship configs and calibration to disk.\n"
+                                 "'*' = there are unsaved changes.")
+        ttk.Button(blk_top_buttons, text="Online HELP", command=self.open_help).grid(row=0, column=3, padx=5,
+                                                                                     pady=10, sticky=tk.E)
 
         self._nb = ttk.Notebook(win)
         self._nb.grid(row=1, padx=10, pady=5, sticky="NSEW")
 
         page0 = ttk.Frame(self._nb)
         page0.grid_columnconfigure(0, weight=1)
-        page0.grid_rowconfigure(0, weight=0)
-        page0.grid_rowconfigure(1, weight=0)
-        page0.grid_rowconfigure(2, weight=1)  # Log row
-        self._nb.add(page0, text="Main")  # main page
+        page0.grid_rowconfigure(1, weight=1)  # Log row
+        self._nb.add(page0, text="Main")
+
+        page_ship = ttk.Frame(self._nb)
+        page_ship.grid_columnconfigure([0, 1], weight=1, uniform="ship")
+        self._nb.add(page_ship, text="Ship")
 
         page1 = ttk.Frame(self._nb)
-        page1.grid_columnconfigure(0, weight=1)
-        self._nb.add(page1, text="Settings")  # options page
+        self._nb.add(page1, text="Settings")
 
         page2 = ttk.Frame(self._nb)
         page2.grid_columnconfigure([0, 1], weight=1)
-        self._nb.add(page2, text="Debug/Test")  # debug/test page
+        self._nb.add(page2, text="Debug/Test")
 
         # === Calibration Tab ===
         page_calibration = ttk.Frame(self._nb)
         page_calibration.grid_columnconfigure(0, weight=1)
         self._nb.add(page_calibration, text="Calibration")
-        # self.create_calibration_tab(page_calibration)
         self.calibration = Calibration(self.ed_ap, self.callback)
         self.calibration.create_calibration_tab(page_calibration)
-        # self.calibration_tab.frame.pack(fill="both", expand=True)
 
         # === Waypoint Editor Tab ===
         page_waypoint_editor = ttk.Frame(self._nb)
@@ -1140,173 +1163,150 @@ class APGui:
         page_tce_integration = ttk.Frame(self._nb)
         page_tce_integration.grid_columnconfigure(0, weight=1)
         self._nb.add(page_tce_integration, text="TCE")
-        tce_integration_tab = self.ed_ap.tce_integration.create_gui_tab(self, page_tce_integration)
+        self.ed_ap.tce_integration.create_gui_tab(self, page_tce_integration)
 
-        # === MAIN TAB ===
-        # main options block
+        # ==============================================================================================================
+        # MAIN TAB: modes | live status, log
+        # ==============================================================================================================
         blk_main = ttk.Frame(page0)
         blk_main.grid(row=0, column=0, padx=10, pady=5, sticky="NSEW")
-        blk_main.columnconfigure([0, 1], weight=1, minsize=100, uniform="group1")
+        blk_main.columnconfigure(0, weight=2, uniform="main")
+        blk_main.columnconfigure(1, weight=3, uniform="main")
 
-        # ap mode checkboxes block
-        blk_modes = ttk.LabelFrame(blk_main, text="MODE", padding=(10, 5))
+        # --- modes
+        blk_modes = ttk.LabelFrame(blk_main, text="MODE  (tick to start, untick to stop)", padding=(10, 5))
         blk_modes.grid(row=0, column=0, padx=2, pady=2, sticky="NSEW")
         self.makeform(blk_modes, FORM_TYPE_CHECKBOX, modes_check_fields)
+        btn_stop = ttk.Button(blk_modes, text="STOP ALL", command=self.stop_all_assists, style="Accent.TButton")
+        btn_stop.grid(row=len(modes_check_fields), column=0, columnspan=2, padx=2, pady=(10, 4), sticky="EW")
+        hk = self.ed_ap.config.get('HotKey_StopAllAssists', 'end')
+        self._tip(btn_stop, f"Stops every running assist at once.\nHotkey: '{hk}' (if hotkeys are enabled in "
+                            f"Settings > Hotkeys).")
 
-        # ship values block
-        blk_ship = ttk.LabelFrame(blk_main, text="SHIP", padding=(10, 5))
-        blk_ship.grid(row=0, column=1, padx=2, pady=2, sticky="NSEW")
+        # --- live status
+        blk_live = ttk.LabelFrame(blk_main, text="STATUS", padding=(10, 5))
+        blk_live.grid(row=0, column=1, padx=2, pady=2, sticky="NSEW")
+        blk_live.columnconfigure(1, weight=1)
+        rows = (('mode', 'Assist'), ('status', 'Activity'), ('runtime', 'Running for'), ('location', 'Location'),
+                ('ship', 'Ship'), ('fuel', 'Fuel'), ('cargo', 'Cargo'), ('waypoints', 'Waypoints'),
+                ('jumps', 'Jumps'))
+        r = 0
+        for key, label in rows:
+            ttk.Label(blk_live, text=label + ":", foreground="#9a9a9a").grid(row=r, column=0, sticky="NW", padx=2,
+                                                                             pady=1)
+            if key == 'fuel':
+                frm = ttk.Frame(blk_live)
+                frm.grid(row=r, column=1, sticky="EW", padx=2, pady=1)
+                frm.columnconfigure(0, weight=1)
+                self.live['fuel_bar'] = ttk.Progressbar(frm, maximum=100, value=0, length=120)
+                self.live['fuel_bar'].grid(row=0, column=0, sticky="EW", padx=(0, 6))
+                self.live['fuel'] = ttk.Label(frm, text="-")
+                self.live['fuel'].grid(row=0, column=1, sticky="W")
+            else:
+                self.live[key] = ttk.Label(blk_live, text="-", wraplength=330, justify=tk.LEFT)
+                self.live[key].grid(row=r, column=1, sticky="W", padx=2, pady=1)
+            r += 1
+        self.live['mode'].configure(font=("Segoe UI", 10, "bold"))
 
-        lbl_sun_pitch_up = ttk.Label(blk_ship, text='SunPitchUp +/- Time:')
-        lbl_sun_pitch_up.grid(row=1, column=0, pady=3, sticky=tk.W)
-        spn_sun_pitch_up = ttk.Spinbox(blk_ship, width=10, from_=-100, to=100, increment=0.5, justify=tk.RIGHT)
-        spn_sun_pitch_up.grid(row=1, column=1, padx=2, pady=2, sticky=tk.E)
-        spn_sun_pitch_up.bind('<FocusOut>', self.entry_update)
-        self.entries['ship'] = {}
-        self.entries['ship']['SunPitchUp+Time'] = spn_sun_pitch_up
-
-        lbl_calibrate_note = ttk.Label(blk_ship, text="Ship RPY Tuning:\n1. Enable Auto-tune.\n"
-                                                      "2. Fly until until response is correct.\n"
-                                                      "3. Use Align to Target button to fine tune.\n"
-                                                      "4a. Use Throttle dropdown to select and...\n"
-                                                      "4b. Edit Curve if necessary and save changes.\n"
-                                                      "5. Disable Auto-tune.")
-        lbl_calibrate_note.grid(row=2, columnspan=2, pady=5, sticky=tk.W)
-
-        self.checkboxvar['Enable Auto-tune RPY'] = tk.BooleanVar()
-        self.checkboxvar['Enable Auto-tune RPY'].set(bool(self.ed_ap.config['AutoTuneRPYRates']))
-        cb_auto_tune_rpy = ttk.Checkbutton(blk_ship, text='Enable Auto-tune RPY',
-                                           variable=self.checkboxvar['Enable Auto-tune RPY'],
-                                           command=(lambda field='Enable Auto-tune RPY': self.check_cb(field)))
-        cb_auto_tune_rpy.grid(row=3, column=0, padx=2, pady=2, sticky=tk.W)
-
-        btn_speed_0 = ttk.Button(blk_ship, text='0% Throttle', command=self.ship_throttle_0)
-        btn_speed_0.grid(row=4, column=0, padx=2, pady=12, columnspan=1, sticky="NSEW")
-        btn_speed_50 = ttk.Button(blk_ship, text='50% Throttle', command=self.ship_throttle_50)
-        btn_speed_50.grid(row=4, column=1, padx=2, pady=12, columnspan=1, sticky="NSEW")
-        btn_speed_100 = ttk.Button(blk_ship, text='100% Throttle', command=self.ship_throttle_100)
-        btn_speed_100.grid(row=5, column=0, padx=2, pady=2, columnspan=1, sticky="NSEW")
-
-        btn_align_target = ttk.Button(blk_ship, text='Align to Target', command=self.tuning_align_target)
-        btn_align_target.grid(row=6, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-
-        ttk.Label(blk_ship, text="Throttle:").grid(row=7, column=0, padx=5, pady=5, sticky=tk.W)
-
-        self.throttle_var = tk.StringVar()
-        self.throttle_combo = ttk.Combobox(blk_ship, textvariable=self.throttle_var, values=self.throttle_keys)
-        self.throttle_combo.grid(row=7, column=1, padx=5, pady=5, sticky="EW")
-        self.throttle_combo.bind("<<ComboboxSelected>>", self.on_throttle_select)
-
-
-        # btn_tst_roll = ttk.Button(blk_ship, text='4. Gather Roll Rates', command=self.ship_tst_roll)
-        # btn_tst_roll.grid(row=10, column=0, padx=2, pady=2, columnspan=1, sticky="NSEW")
-        btn_roll_edit = ttk.Button(blk_ship, text='Edit Roll Curve', command=self.edit_roll_curve)
-        btn_roll_edit.grid(row=10, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-
-        # lbl_calibrate_note2 = ttk.Label(blk_ship, text="Tune Pitch & Yaw:\n1. Set speed above.\n"
-        #                                                "2. Target remote System.\n"
-        #                                                "3. Maneuver target to center of screen (and compass).")
-        # lbl_calibrate_note2.grid(row=11, columnspan=2, pady=5, sticky=tk.W)
-        # btn_tst_pitch = ttk.Button(blk_ship, text='4. Gather Pitch Rates', command=self.ship_tst_pitch)
-        # btn_tst_pitch.grid(row=12, column=0, padx=2, pady=2, columnspan=1, sticky="NSEW")
-        btn_pit_edit = ttk.Button(blk_ship, text='Edit Pitch Curve', command=self.edit_pit_curve)
-        btn_pit_edit.grid(row=12, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-        # btn_tst_yaw = ttk.Button(blk_ship, text='6. Gather Yaw Rates', command=self.ship_tst_yaw)
-        # btn_tst_yaw.grid(row=13, column=0, padx=5, pady=2, columnspan=1, sticky="NSEW")
-        btn_yaw_edit = ttk.Button(blk_ship, text='Edit Yaw Curve', command=self.edit_yaw_curve)
-        btn_yaw_edit.grid(row=13, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-
-        # log window
+        # --- log
         log = ttk.LabelFrame(page0, text="LOG", padding=(10, 5))
-        log.grid(row=2, column=0, padx=10, pady=5, sticky="NSEW")
+        log.grid(row=1, column=0, padx=10, pady=5, sticky="NSEW")
         log.grid_columnconfigure(0, weight=1)
-        log.grid_rowconfigure(0, weight=1)
+        log.grid_rowconfigure(1, weight=1)
+        log_bar = ttk.Frame(log)
+        log_bar.grid(row=0, column=0, columnspan=2, sticky="EW", pady=(0, 4))
+        self.autoscroll_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(log_bar, text="Auto-scroll", variable=self.autoscroll_var).pack(side="left")
+        ttk.Button(log_bar, text="Open log file", command=self.open_logfile).pack(side="right", padx=2)
+        ttk.Button(log_bar, text="Clear", command=self.clear_log).pack(side="right", padx=2)
         y_scrollbar = ttk.Scrollbar(log)
-        y_scrollbar.grid(row=0, column=1, sticky="NSE")
+        y_scrollbar.grid(row=1, column=1, sticky="NSE")
         x_scrollbar = ttk.Scrollbar(log, orient="horizontal")
-        x_scrollbar.grid(row=1, column=0, sticky="EW")
-        mylist = tk.Listbox(log, width=100, yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
-        mylist.grid(row=0, column=0, sticky="NSEW")
+        x_scrollbar.grid(row=2, column=0, sticky="EW")
+        mylist = tk.Listbox(log, width=100, height=14, yscrollcommand=y_scrollbar.set,
+                            xscrollcommand=x_scrollbar.set)
+        mylist.grid(row=1, column=0, sticky="NSEW")
         y_scrollbar.config(command=mylist.yview)
         x_scrollbar.config(command=mylist.xview)
 
-        # === SETTINGS TAB ===
-        # settings block
-        blk_settings = ttk.Frame(page1)
-        blk_settings.grid(row=0, column=0, padx=10, pady=5, sticky="EW")
-        blk_settings.columnconfigure([0, 1], weight=1, minsize=100, uniform="group1")
+        # ==============================================================================================================
+        # SHIP TAB: tuning of the ship rotation rates
+        # ==============================================================================================================
+        blk_ship = ttk.LabelFrame(page_ship, text="SHIP SETTINGS", padding=(10, 5))
+        blk_ship.grid(row=0, column=0, padx=10, pady=5, sticky="NSEW")
+        blk_ship.columnconfigure(1, weight=1)
 
-        # autopilot settings block
-        blk_ap = ttk.LabelFrame(blk_settings, text="AUTOPILOT", padding=(10, 5))
-        blk_ap.grid(row=0, column=0, padx=2, pady=2, sticky="NSEW")
-        self.entries['autopilot'] = self.makeform(blk_ap, FORM_TYPE_SPINBOX, autopilot_entry_fields)
-        self.checkboxvar['Enable Randomness'] = tk.BooleanVar()
-        cb_random = ttk.Checkbutton(blk_ap, text='Enable Randomness', variable=self.checkboxvar['Enable Randomness'], command=(lambda field='Enable Randomness': self.check_cb(field)))
-        cb_random.grid(row=5, column=0, columnspan=2, sticky=tk.W)
-        self.checkboxvar['Automatic logout'] = tk.BooleanVar()
-        cb_logout = ttk.Checkbutton(blk_ap, text='Automatic logout', variable=self.checkboxvar['Automatic logout'], command=(lambda field='Automatic logout': self.check_cb(field)))
-        cb_logout.grid(row=6, column=0, columnspan=2, sticky=tk.W)
+        lbl_sun_pitch_up = ttk.Label(blk_ship, text='SunPitchUp +/- Time (s):')
+        lbl_sun_pitch_up.grid(row=0, column=0, pady=3, sticky=tk.W)
+        spn_sun_pitch_up = ttk.Spinbox(blk_ship, width=10, from_=-100, to=100, increment=0.5, justify=tk.RIGHT)
+        spn_sun_pitch_up.grid(row=0, column=1, padx=2, pady=2, sticky=tk.E)
+        spn_sun_pitch_up.bind('<FocusOut>', self.entry_update)
+        spn_sun_pitch_up.bind('<Return>', self.entry_update)
+        self.entries['ship'] = {}
+        self.entries['ship']['SunPitchUp+Time'] = spn_sun_pitch_up
+        self._tip(lbl_sun_pitch_up, self.tooltips['SunPitchUp+Time'])
 
-        # buttons settings block
-        blk_buttons = ttk.LabelFrame(blk_settings, text="BUTTONS", padding=(10, 5))
-        blk_buttons.grid(row=0, column=1, padx=2, pady=2, sticky="NSEW")
-        blk_dss = ttk.Frame(blk_buttons)
-        blk_dss.grid(row=0, column=0, columnspan=2, padx=0, pady=0, sticky="NSEW")
-        lb_dss = ttk.Label(blk_dss, text="D-Scanner (Honk) Button: ")
-        lb_dss.grid(row=0, column=0, sticky=tk.W)
-        self.radiobuttonvar['dss_button'] = tk.StringVar()
-        rb_dss_primary = ttk.Radiobutton(blk_dss, text="Primary", variable=self.radiobuttonvar['dss_button'], value="Primary", command=(lambda field='dss_button': self.check_cb(field)))
-        rb_dss_primary.grid(row=0, column=1, sticky=tk.W)
-        rb_dss_secondary = ttk.Radiobutton(blk_dss, text="Secondary", variable=self.radiobuttonvar['dss_button'], value="Secondary", command=(lambda field='dss_button': self.check_cb(field)))
-        rb_dss_secondary.grid(row=1, column=1, sticky=tk.W)
-        self.checkboxvar['Enable Hotkeys'] = tk.BooleanVar()
-        cb_enable = ttk.Checkbutton(blk_buttons, text='Enable Hotkeys (toggle after hotkey change)', variable=self.checkboxvar['Enable Hotkeys'], command=(lambda field='Enable Hotkeys': self.check_cb(field)))
-        cb_enable.grid(row=2, column=0, columnspan=2, sticky=tk.W)
-        self.entries['buttons'] = self.makeform(blk_buttons, FORM_TYPE_ENTRY, buttons_entry_fields, 3)
+        self.checkboxvar['Enable Auto-tune RPY'] = tk.BooleanVar()
+        self.checkboxvar['Enable Auto-tune RPY'].set(bool(self.ed_ap.config['AutoTuneRPYRates']))
+        cb_auto_tune_rpy = ttk.Checkbutton(blk_ship, text='Auto-tune roll/pitch/yaw rates while flying',
+                                           variable=self.checkboxvar['Enable Auto-tune RPY'],
+                                           command=(lambda field='Enable Auto-tune RPY': self.check_cb(field)))
+        cb_auto_tune_rpy.grid(row=1, column=0, columnspan=2, padx=2, pady=6, sticky=tk.W)
+        self._tip(cb_auto_tune_rpy, "Measures how far the ship really turns for each key press and corrects the "
+                                    "rate curves (saved automatically every 20 s).\nSwitch it off when the "
+                                    "steering is good.")
 
-        # refuel settings block
-        blk_fuel = ttk.LabelFrame(blk_settings, text="FUEL", padding=(10, 5))
-        blk_fuel.grid(row=1, column=0, padx=2, pady=2, sticky="NSEW")
-        self.entries['refuel'] = self.makeform(blk_fuel, FORM_TYPE_SPINBOX, refuel_entry_fields)
+        lbl_steps = ttk.Label(blk_ship, justify=tk.LEFT, foreground="#9a9a9a",
+                              text="How to tune:\n"
+                                   "1. Enable auto-tune and fly (or use 'Align to Target').\n"
+                                   "2. Repeat until the ship turns precisely onto the target.\n"
+                                   "3. Optional: check/edit a curve on the right, then Save.\n"
+                                   "4. Disable auto-tune.")
+        lbl_steps.grid(row=2, column=0, columnspan=2, pady=5, sticky=tk.W)
 
-        # overlay settings block
-        blk_overlay = ttk.LabelFrame(blk_settings, text="OVERLAY", padding=(10, 5))
-        blk_overlay.grid(row=1, column=1, padx=2, pady=2, sticky="NSEW")
-        self.checkboxvar['Enable Overlay'] = tk.BooleanVar()
-        cb_enable = ttk.Checkbutton(blk_overlay, text='Enable', variable=self.checkboxvar['Enable Overlay'], command=(lambda field='Enable Overlay': self.check_cb(field)))
-        cb_enable.grid(row=0, column=0, columnspan=2, sticky=tk.W)
-        self.entries['overlay'] = self.makeform(blk_overlay, FORM_TYPE_SPINBOX, overlay_entry_fields, 1, 1.0, 0.0, 3000.0)
+        blk_test = ttk.LabelFrame(page_ship, text="TEST (Elite is brought to the front)", padding=(10, 5))
+        blk_test.grid(row=1, column=0, padx=10, pady=5, sticky="NSEW")
+        blk_test.columnconfigure([0, 1, 2], weight=1, uniform="thr")
+        ttk.Button(blk_test, text='0% Throttle', command=self.ship_throttle_0).grid(row=0, column=0, padx=2, pady=4,
+                                                                                    sticky="EW")
+        ttk.Button(blk_test, text='50% Throttle', command=self.ship_throttle_50).grid(row=0, column=1, padx=2,
+                                                                                      pady=4, sticky="EW")
+        ttk.Button(blk_test, text='100% Throttle', command=self.ship_throttle_100).grid(row=0, column=2, padx=2,
+                                                                                        pady=4, sticky="EW")
+        btn_align_target = ttk.Button(blk_test, text='Align to Target', command=self.tuning_align_target)
+        btn_align_target.grid(row=1, column=0, columnspan=3, padx=2, pady=4, sticky="EW")
+        self._tip(btn_align_target, "Turns the ship to the selected target with the compass (uses and tunes the "
+                                    "current rate curves). Not possible while an assist is running.")
 
-        # Keys settings block
-        blk_keys = ttk.LabelFrame(blk_settings, text="KEYS", padding=(10, 5))
-        blk_keys.grid(row=2, column=0, padx=2, pady=2, sticky="NSEW")
-        self.checkboxvar['Activate Elite for each key'] = tk.BooleanVar()
-        cb_activate_elite = ttk.Checkbutton(blk_keys, text='Activate Elite for each key', variable=self.checkboxvar['Activate Elite for each key'], command=(lambda field='Activate Elite for each key': self.check_cb(field)))
-        cb_activate_elite.grid(row=0, column=0, columnspan=2, sticky=tk.W)
-        self.entries['keys'] = self.makeform(blk_keys, FORM_TYPE_SPINBOX, keys_entry_fields, 1, 0.01)
+        blk_curves = ttk.LabelFrame(page_ship, text="RATE CURVES", padding=(10, 5))
+        blk_curves.grid(row=0, column=1, rowspan=2, padx=10, pady=5, sticky="NSEW")
+        blk_curves.columnconfigure(1, weight=1)
+        ttk.Label(blk_curves, text="Throttle:").grid(row=0, column=0, padx=2, pady=5, sticky=tk.W)
+        self.throttle_var = tk.StringVar()
+        self.throttle_combo = ttk.Combobox(blk_curves, textvariable=self.throttle_var, values=self.throttle_keys,
+                                           state="readonly")
+        self.throttle_combo.grid(row=0, column=1, padx=2, pady=5, sticky="EW")
+        self.throttle_combo.bind("<<ComboboxSelected>>", self.on_throttle_select)
+        self._tip(self.throttle_combo, "Speed setting the curves belong to (e.g. SCSpeed50 = 50 % in supercruise).")
+        ttk.Button(blk_curves, text='Edit Roll Curve', command=self.edit_roll_curve).grid(
+            row=1, column=0, columnspan=2, padx=2, pady=3, sticky="EW")
+        ttk.Button(blk_curves, text='Edit Pitch Curve', command=self.edit_pit_curve).grid(
+            row=2, column=0, columnspan=2, padx=2, pady=3, sticky="EW")
+        ttk.Button(blk_curves, text='Edit Yaw Curve', command=self.edit_yaw_curve).grid(
+            row=3, column=0, columnspan=2, padx=2, pady=3, sticky="EW")
+        ttk.Label(blk_curves, foreground="#9a9a9a", justify=tk.LEFT, wraplength=300,
+                  text="A curve maps the wanted turn angle to the key hold time. Changed curves are kept after "
+                       "'Save All Settings'.").grid(row=4, column=0, columnspan=2, pady=8, sticky=tk.W)
 
-        # voice settings block
-        blk_voice = ttk.LabelFrame(blk_settings, text="VOICE", padding=(10, 5))
-        blk_voice.grid(row=3, column=0, padx=2, pady=2, sticky="NSEW")
-        self.checkboxvar['Enable Voice'] = tk.BooleanVar()
-        cb_enable = ttk.Checkbutton(blk_voice, text='Enable', variable=self.checkboxvar['Enable Voice'], command=(lambda field='Enable Voice': self.check_cb(field)))
-        cb_enable.grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        # ==============================================================================================================
+        # SETTINGS TAB
+        # ==============================================================================================================
+        self.settings_tab = SettingsTab(page1, self.ed_ap.config, self.ed_ap.default_config(),
+                                        on_change=self.on_setting_change, on_dirty=self.on_settings_dirty)
 
-        # ELW Scanner settings block
-        blk_voice = ttk.LabelFrame(blk_settings, text="ELW SCANNER", padding=(10, 5))
-        blk_voice.grid(row=3, column=1, padx=2, pady=2, sticky="NSEW")
-        self.checkboxvar['ELW Scanner'] = tk.BooleanVar()
-        cb_enable = ttk.Checkbutton(blk_voice, text='Enable', variable=self.checkboxvar['ELW Scanner'], command=(lambda field='ELW Scanner': self.check_cb(field)))
-        cb_enable.grid(row=0, column=0, columnspan=2, sticky=tk.W)
-
-        # AFK Combat settings block
-        blk_afk_combat = ttk.LabelFrame(blk_settings, text="AFK Combat", padding=(10, 5))
-        blk_afk_combat.grid(row=4, column=0, padx=2, pady=2, sticky="NSEW")
-        self.checkboxvar['AFKCombat AttackAtWill'] = tk.BooleanVar()
-        cb_enable = ttk.Checkbutton(blk_afk_combat, text='Command SLF to Attack At Will', variable=self.checkboxvar['AFKCombat AttackAtWill'], command=(lambda field='AFKCombat AttackAtWill': self.check_cb(field)))
-        cb_enable.grid(row=0, column=0, columnspan=2, sticky=tk.W)
-
-        # ==== DEBUG/TEST TAB ====
+        # ==============================================================================================================
+        # DEBUG/TEST TAB
+        # ==============================================================================================================
         # File Actions
         blk_file_actions = ttk.LabelFrame(page2, text="File Actions", padding=(10, 5))
         blk_file_actions.grid(row=0, column=0, padx=10, pady=5, sticky="NSEW")
@@ -1331,20 +1331,15 @@ class APGui:
         btn_about = ttk.Button(blk_help_actions, text="About", command=self.about)
         btn_about.grid(row=3, column=0, padx=2, pady=2, sticky=tk.W)
 
-        # # debug block
-        # blk_debug = ttk.Frame(page2)
-        # blk_debug.grid(row=1, column=0, padx=10, pady=5, sticky=(tk.E, tk.W))
-        # blk_debug.columnconfigure([0, 1], weight=1, minsize=100, uniform="group2")
-
         # Debug Settings frame
-        blk_debug_settings = ttk.LabelFrame(page2, text="Debug Settings", padding=(10, 5))
+        blk_debug_settings = ttk.LabelFrame(page2, text="Log Level", padding=(10, 5))
         blk_debug_settings.grid(row=1, column=0, padx=10, pady=5, sticky="NSEW")
         self.radiobuttonvar['debug_mode'] = tk.StringVar()
         rb_debug_debug = ttk.Radiobutton(blk_debug_settings, text="Debug + Info + Errors", variable=self.radiobuttonvar['debug_mode'], value="Debug", command=(lambda field='debug_mode': self.check_cb(field)))
         rb_debug_debug.grid(row=0, column=1, columnspan=2, sticky=tk.W)
         rb_debug_info = ttk.Radiobutton(blk_debug_settings, text="Info + Errors", variable=self.radiobuttonvar['debug_mode'], value="Info", command=(lambda field='debug_mode': self.check_cb(field)))
         rb_debug_info.grid(row=1, column=1, columnspan=2, sticky=tk.W)
-        rb_debug_error = ttk.Radiobutton(blk_debug_settings, text="Errors only (default)", variable=self.radiobuttonvar['debug_mode'], value="Error", command=(lambda field='debug_mode': self.check_cb(field)))
+        rb_debug_error = ttk.Radiobutton(blk_debug_settings, text="Errors only", variable=self.radiobuttonvar['debug_mode'], value="Error", command=(lambda field='debug_mode': self.check_cb(field)))
         rb_debug_error.grid(row=2, column=1, columnspan=2, sticky=tk.W)
         btn_open_logfile = ttk.Button(blk_debug_settings, text='Open Log File', command=self.open_logfile)
         btn_open_logfile.grid(row=3, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
@@ -1366,33 +1361,36 @@ class APGui:
         self.checkboxvar['Single Waypoint Assist'] = tk.BooleanVar()
         cb_single_waypoint = ttk.Checkbutton(blk_single_waypoint_asst, text='Single Waypoint Assist', variable=self.checkboxvar['Single Waypoint Assist'], command=(lambda field='Single Waypoint Assist': self.check_cb(field)))
         cb_single_waypoint.grid(row=2, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
+        self._tip(cb_single_waypoint, self.tooltips['Single Waypoint Assist'])
 
-        blk_debug_buttons = ttk.Frame(page2)
+        blk_debug_buttons = ttk.LabelFrame(page2, text="Debug Output", padding=(10, 5))
         blk_debug_buttons.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="NSEW")
         blk_debug_buttons.columnconfigure([0, 1], weight=1, minsize=100)
 
         self.checkboxvar['Debug Overlay'] = tk.BooleanVar()
         cb_debug_overlay = ttk.Checkbutton(blk_debug_buttons, text='Debug Overlay', variable=self.checkboxvar['Debug Overlay'], command=(lambda field='Debug Overlay': self.check_cb(field)))
         cb_debug_overlay.grid(row=6, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-        tip = ToolTip(cb_debug_overlay, msg=self.tooltips['Debug Overlay'], delay=1.0, bg="#808080", fg="#FFFFFF")
+        self._tip(cb_debug_overlay, self.tooltips['Debug Overlay'])
 
         self.checkboxvar['Debug OCR'] = tk.BooleanVar()
         cb_debug_ocr = ttk.Checkbutton(blk_debug_buttons, text="Debug OCR - Writes OCR output to 'ocr-output' folder", variable=self.checkboxvar['Debug OCR'], command=(lambda field='Debug OCR': self.check_cb(field)))
         cb_debug_ocr.grid(row=7, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-        tip = ToolTip(cb_debug_ocr, msg=self.tooltips['Debug OCR'], delay=1.0, bg="#808080", fg="#FFFFFF")
+        self._tip(cb_debug_ocr, self.tooltips['Debug OCR'])
 
         self.checkboxvar['Debug Images'] = tk.BooleanVar()
         cb_debug_images = ttk.Checkbutton(blk_debug_buttons, text="Debug Images - Writes debug images to 'debug-output' folder", variable=self.checkboxvar['Debug Images'], command=(lambda field='Debug Images': self.check_cb(field)))
         cb_debug_images.grid(row=8, column=0, padx=2, pady=2, columnspan=2, sticky="NSEW")
-        tip = ToolTip(cb_debug_images, msg=self.tooltips['Debug Images'], delay=1.0, bg="#808080", fg="#FFFFFF")
+        self._tip(cb_debug_images, self.tooltips['Debug Images'])
 
         # === Status Bar ===
         statusbar = ttk.Frame(win)
-        statusbar.grid(row=4, column=0)
-        self.status = ttk.Label(win, text="Status: ", relief=tk.SUNKEN, anchor=tk.W, justify=tk.LEFT, width=29)
-        self.jumpcount = ttk.Label(statusbar, text="<info> ", relief=tk.SUNKEN, anchor=tk.W, justify=tk.LEFT, width=40)
-        self.status.pack(in_=statusbar, side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.jumpcount.pack(in_=statusbar, side=tk.RIGHT, fill=tk.Y, expand=False)
+        statusbar.grid(row=4, column=0, sticky="EW", padx=10, pady=(0, 6))
+        self.status = ttk.Label(statusbar, text="Status: Idle", relief=tk.SUNKEN, anchor=tk.W, justify=tk.LEFT,
+                                width=29)
+        self.jumpcount = ttk.Label(statusbar, text="<info> ", relief=tk.SUNKEN, anchor=tk.W, justify=tk.LEFT,
+                                   width=40)
+        self.status.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.jumpcount.pack(side=tk.RIGHT, fill=tk.Y, expand=False)
 
         return mylist
 

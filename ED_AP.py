@@ -355,10 +355,15 @@ class EDAutopilot:
         write_json_file(self.config, filepath='./configs/AP.json')
 
     def load_config(self):
-        """ Load AP.Json Config File. """
-        # NOTE!!! When adding a new config value below, add the same after read_config() to set
-        # a default value or an error will occur reading the new value!
-        self.config = {
+        """ Load AP.Json Config File. Missing entries are filled with the defaults of default_config(). """
+        defaults = self.default_config()
+        self.config = dict(defaults)
+        self._load_config_file(defaults)
+
+    @staticmethod
+    def default_config() -> dict:
+        """ The default value of every AP.json setting (also used by the GUI 'Reset to defaults'). """
+        return {
             "DSSButton": "Primary",  # if anything other than "Primary", it will use the Secondary Fire button for DSS
             "JumpTries": 3,  #
             "NavAlignTries": 3,  #
@@ -435,9 +440,12 @@ class EDAutopilot:
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
+            "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
+            "WaypointRestartDelay": 10,  # Waypoint: secs to wait before an auto-restart / a new station attempt
+            "RandomnessScale": 1.0,  # EnableRandomness: factor for the random pauses (0.5 = shorter, 2 = longer)
         }
-        # NOTE!!! When adding a new config value above, add the same after read_config() to set
-        # a default value or an error will occur reading the new value!
+
+    def _load_config_file(self, defaults: dict):
 
         cnf = read_json_file(filepath='./configs/AP.json')
         # if we read it then point to it, otherwise use the default table above
@@ -531,6 +539,9 @@ class EDAutopilot:
                 cnf['FuelRouteCheck'] = True
             if 'GameConnectionCheck' not in cnf:
                 cnf['GameConnectionCheck'] = True
+            # Any other missing entry (new settings) gets its default value
+            for key, value in defaults.items():
+                cnf.setdefault(key, value)
             self.config = cnf
             logger.debug("read AP json:" + str(cnf))
         else:
@@ -2949,7 +2960,7 @@ class EDAutopilot:
         self.sc_engage(False)
         self.jn.ship_state()['interdicted'] = False
 
-        max_activations = 5
+        max_activations = max(1, int(self.config.get('SCAssistMaxActivations', 5)))
         for activation in range(1, max_activations + 1):
             res = self._sc_assist_ingame_engage(scr_reg, target)
             if not res:
@@ -3473,7 +3484,8 @@ class EDAutopilot:
     def random_pause(self, max_sec: float = 2.0, min_sec: float = 0.0):
         """ Optional random pause (EnableRandomness) so actions do not happen with a fixed rhythm. """
         if self.config.get("EnableRandomness", False):
-            t = random.uniform(min_sec, max_sec)
+            scale = max(0.0, float(self.config.get("RandomnessScale", 1.0)))
+            t = random.uniform(min_sec, max_sec) * scale
             logger.debug(f"random_pause: {t:.2f}s")
             sleep(t)
 
@@ -3811,9 +3823,10 @@ class EDAutopilot:
                         self._release_keys_safe()
                         self.stop_sco_monitoring()
                         self.set_throttle_0()
-                        self.ap_ckb('log+vce', f"Restarting Waypoint Assist in 10 seconds "
+                        delay = float(self.config.get('WaypointRestartDelay', 10))
+                        self.ap_ckb('log+vce', f"Restarting Waypoint Assist in {delay:.0f} seconds "
                                                f"({restarts} of {max_restarts}).")
-                        sleep(10)
+                        sleep(delay)
                     except EDAP_Interrupt:
                         logger.debug("Caught stop exception while waiting for the restart")
                         self._release_keys_safe()
