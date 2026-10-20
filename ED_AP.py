@@ -441,6 +441,7 @@ class EDAutopilot:
             "WaypointAutoRestarts": 3,  # Waypoint Assist restarts itself after an error, max. this often in a row
             "SCAssistStallTime": 60,  # In-game SC Assist: secs without change of the distance to the target = stuck
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
+            "TradeBuyAttempts": 2,  # Waypoint: attempts to buy a commodity (market left and entered again between)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -557,6 +558,8 @@ class EDAutopilot:
                 cnf['SCAssistStallTime'] = 60
             if 'WaypointStationRetries' not in cnf:
                 cnf['WaypointStationRetries'] = 3
+            if 'TradeBuyAttempts' not in cnf:
+                cnf['TradeBuyAttempts'] = 2
             if 'FuelRouteCheck' not in cnf:
                 cnf['FuelRouteCheck'] = True
             if 'GameConnectionCheck' not in cnf:

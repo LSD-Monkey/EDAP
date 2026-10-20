@@ -54,6 +54,10 @@ SETTINGS: list[dict] = [
                                          "a station."),
     dict(section="Waypoint Assist", key="WaypointStationRetries", label="Attempts to reach a station", type="int",
          min=1, max=20, tip="Waypoint Assist stops after this many failed attempts in a row to reach a station."),
+    dict(section="Waypoint Assist", key="TradeBuyAttempts", label="Attempts to buy a commodity", type="int",
+         min=1, max=5, tip="If a purchase is not confirmed (cargo unchanged), the market is left and entered again "
+                           "and the purchase is tried again, up to this many attempts. Then Waypoint Assist "
+                           "stops, still docked."),
     dict(section="Waypoint Assist", key="FuelRouteCheck", label="Check fuel for the route", type="bool",
          tip="Ships without fuel scoop: before jumping, the fuel for the plotted route is estimated from your last "
              "jumps (same ship, similar cargo). Stops if it is not enough, warns if it will be tight."),

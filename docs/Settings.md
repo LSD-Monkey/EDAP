@@ -40,6 +40,7 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 | Auto-restarts after an error | `WaypointAutoRestarts` | `3` | Waypoint Assist restarts itself this often in a row after an error (e.g. alignment failed). The counter is reset after 20 minutes without error. 0 = never restart. Range 0 - 20. |
 | Wait before restart / retry (s) | `WaypointRestartDelay` | `10` | Seconds to wait before an auto-restart or a new attempt to reach a station. Range 0 - 300. |
 | Attempts to reach a station | `WaypointStationRetries` | `3` | Waypoint Assist stops after this many failed attempts in a row to reach a station. Range 1 - 20. |
+| Attempts to buy a commodity | `TradeBuyAttempts` | `2` | If a purchase is not confirmed (cargo unchanged), the market is left and entered again and the purchase is tried again, up to this many attempts. Then Waypoint Assist stops, still docked. Range 1 - 5. |
 | Check fuel for the route | `FuelRouteCheck` | `True` | Ships without fuel scoop: before jumping, the fuel for the plotted route is estimated from your last jumps (same ship, similar cargo). Stops if it is not enough, warns if it will be tight. |
 
 ## Supercruise Assist

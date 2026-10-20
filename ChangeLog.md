@@ -6,6 +6,8 @@
   Now the read name is also compared with all commodities of the market: if it is one that EDAP does not count,
   EDAP steps towards the target one item at a time and reads the name after every step. A known but wrong
   commodity is never bought any more. Repeated small offsets are corrected with single steps.
+- NEW setting 'Attempts to buy a commodity' (TradeBuyAttempts, Waypoint Assist section, default 2, 1-5): how often a
+  purchase is tried (market left and entered again in between) before Waypoint Assist stops.
 - FIX market: the name region still cut off the start of long names ('RFORMANCEENHANCERS'): 0.678 -> 0.655.
 
 # 10/20/2026 v1.9.4 b34

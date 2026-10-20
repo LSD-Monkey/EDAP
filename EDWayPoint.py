@@ -275,7 +275,8 @@ class EDWayPoint:
         On failure the market is left and entered again and the purchase is tried once more.
         Returns the quantity actually bought. """
         mkt = self.ap.stn_svcs_in_ship.commodities_market
-        for attempt in (1, 2):
+        attempts = max(1, int(self.ap.config.get('TradeBuyAttempts', 2) or 2))
+        for attempt in range(1, attempts + 1):
             before = int(ap.status.get_cleaned_data()['Cargo'])
             ts = ap.status.current_data['timestamp']
             mkt.last_select_failed = False
@@ -295,8 +296,8 @@ class EDWayPoint:
                 self.ap_ckb('log+vce', f"Could not select {name} in the market.")
             else:
                 self.ap_ckb('log+vce', f"Purchase of {name} not confirmed, cargo unchanged ({after} t).")
-            if attempt == 1:
-                self.ap_ckb('log', "Leaving and re-entering the market, trying again.")
+            if attempt < attempts:
+                self.ap_ckb('log', f"Leaving and re-entering the market, trying again ({attempt + 1}/{attempts}).")
                 ap.keys.send('UI_Back', repeat=4)
                 sleep(2)
                 self.ap.stn_svcs_in_ship.goto_commodities_market()
