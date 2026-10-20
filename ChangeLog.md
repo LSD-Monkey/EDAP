@@ -1,3 +1,11 @@
+# 10/20/2026 v1.9.4 b31
+- New Trade tab: finds the best round trips from a start station (like the Inara trade routes) and starts one
+  directly. Start market from Market.json (docked) or the Ardent Insight API (EDDN data), buyers of every export
+  within the max. distance, best return commodity per destination, profit per trip and estimated profit per hour
+  (jumps by laden jump range, supercruise by arrival distance, docking/trading). Filters: distance, arrival
+  distance, data age, pad size, planetary. 'Start trade route' writes waypoints/trade_<A>_<B>.json (A, B, REPEAT),
+  loads it and starts Waypoint Assist. See docs/Trade.md.
+
 # 10/20/2026 v1.9.4 b30
 - New Market Test (Debug/Test tab): enter a commodity (the dropdown lists what the last opened market sells) and a
   quantity, tick 'Run Market Test'. EDAP opens the commodities market of the station you are docked at, buys the

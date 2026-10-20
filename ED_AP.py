@@ -445,6 +445,12 @@ class EDAutopilot:
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
             "WaypointRestartDelay": 10,  # Waypoint: secs to wait before an auto-restart / a new station attempt
             "RandomnessScale": 1.0,  # EnableRandomness: factor for the random pauses (0.5 = shorter, 2 = longer)
+            "TradeMaxDistance": 60,  # Trade tab: max. distance between the two stations in ly
+            "TradeMaxArrivalLs": 5000,  # Trade tab: max. distance of a station from the arrival star
+            "TradeMaxAgeHours": 24,  # Trade tab: ignore market data older than this
+            "TradeIncludePlanetary": False,  # Trade tab: include planetary stations
+            "TradeSortBy": "Profit per hour",  # Trade tab: sort order
+            "TradeSecsPerJump": 110,  # Trade tab: time estimate per jump incl. alignment (measured ~110 s)
         }
 
     def _load_config_file(self, defaults: dict):

@@ -887,7 +887,9 @@ class APGui:
         # Determine the active Tab
         tab_text = self._nb.tab(self._nb.select(), "text")
 
-        if tab_text == "Ship":
+        if tab_text == "Trade":
+            webbrowser.open_new("https://github.com/LSD-Monkey/EDAP/blob/main/docs/Trade.md")
+        elif tab_text == "Ship":
             webbrowser.open_new("https://github.com/SumZer0-git/EDAPGui/blob/main/docs/RollPitchYaw.md")
         elif tab_text == "Main":
             webbrowser.open_new("https://github.com/SumZer0-git/EDAPGui/blob/main/docs/Main.md")
@@ -1166,6 +1168,9 @@ class APGui:
         page0.grid_rowconfigure(1, weight=1)  # Log row
         self._nb.add(page0, text="Main")
 
+        page_trade = ttk.Frame(self._nb)
+        self._nb.add(page_trade, text="Trade")
+
         page_ship = ttk.Frame(self._nb)
         page_ship.grid_columnconfigure([0, 1], weight=1, uniform="ship")
         self._nb.add(page_ship, text="Ship")
@@ -1183,6 +1188,9 @@ class APGui:
         self._nb.add(page_calibration, text="Calibration")
         self.calibration = Calibration(self.ed_ap, self.callback)
         self.calibration.create_calibration_tab(page_calibration)
+
+        # === Trade Tab (after the waypoint editor exists, it loads the route files) ===
+        self._page_trade = page_trade
 
         # === Waypoint Editor Tab ===
         page_waypoint_editor = ttk.Frame(self._nb)
@@ -1337,6 +1345,12 @@ class APGui:
         ttk.Label(blk_curves, foreground="#9a9a9a", justify=tk.LEFT, wraplength=300,
                   text="A curve maps the wanted turn angle to the key hold time. Changed curves are kept after "
                        "'Save All Settings'.").grid(row=4, column=0, columnspan=2, pady=8, sticky=tk.W)
+
+        # ==============================================================================================================
+        # TRADE TAB
+        # ==============================================================================================================
+        from EDAPTradeTab import TradeTab
+        self.trade_tab = TradeTab(self, self._page_trade)
 
         # ==============================================================================================================
         # SETTINGS TAB
