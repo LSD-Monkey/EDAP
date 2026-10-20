@@ -2441,10 +2441,8 @@ class EDAutopilot:
                     # In space (launched from starport or outpost etc.) OR construction site
                     self.update_ap_status("Undock Complete, accelerating")
 
-                    # Engage Supercruise WITHOUT boosting: we are still in the station's no-fire zone (~7.5 km),
-                    # boosting there gives 'SPEEDING' warnings/fines (seen in the video at 7.3 km) and with an
-                    # empty capacitor it only fails ('Boost failed: insufficient energy').
-                    self.sc_engage(False)
+                    # Engage Supercruise
+                    self.sc_engage(True)
 
         elif on_planet:
             # Check if we are on a landing pad (docked), or landed on the planet surface

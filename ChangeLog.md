@@ -9,8 +9,6 @@
   *selected target* (here the planet Kakmbutan 6), not necessarily the destination; EDAP aligned to the planet and
   the in-game SCA waited with 'ALIGN WITH TARGET DESTINATION' until the user aligned by hand.
 - SC Assist: 'ALIGN WITH TARGET DESTINATION' (read by the existing OCR check) triggers a compass align.
-- Departure from stations without boosting (boost inside the no-fire zone gave a SPEEDING warning at 7.3 km and
-  'Boost failed: insufficient energy').
 - Docking approach at 100% throttle (drop at ~11.5 km, docking possible < 7.5 km), 50% before requesting docking.
 
 # 10/20/2026 v1.9.4 b23 (analysis of datalogger session 2026-10-19_23-28-31)
