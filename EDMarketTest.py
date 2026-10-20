@@ -68,14 +68,25 @@ class MarketTest:
                    (f" Did you mean: {', '.join(close)}?" if close else ""))
         return None
 
+    def _cargo_count(self, name: str) -> int:
+        cp = CargoParser()
+        try:
+            cp.get_cargo_data()
+            item = cp.get_item(name)
+            return int(item['Count']) if item else 0
+        except Exception:
+            return 0
+
     def run(self, name: str, qty: int = 1, sell_back: bool = True) -> bool:
+        """ Buy qty of the commodity and sell it again. With a full hold (or not enough free space) and the
+        commodity on board the order is reversed: sell first, then buy back. That is the order of the trade route
+        (sell, then buy at the same station). """
         ap = self.ap
         mkt = ap.stn_svcs_in_ship.commodities_market
         t_start = time.time()
         self.results = []
         name = (name or '').strip()
         qty = max(1, int(qty))
-        self.say(f"Market test: buy {qty} {name}" + (" and sell it again." if sell_back else "."))
 
         if not name:
             self._step("Start", False, "no commodity entered")
@@ -87,11 +98,23 @@ class MarketTest:
         cap = ap.jn.ship_state().get('cargo_capacity') or 0
         cargo0 = self._cargo()
         free = cap - cargo0
-        self._step("Start", True, f"docked at {ap.jn.ship_state().get('cur_station')}, cargo {cargo0}/{cap} t, "
-                                  f"free {free} t")
-        if free <= 0:
-            self._step("Start", False, "no free cargo space")
+        on_board = self._cargo_count(name)
+        sell_first = free < qty and on_board > 0
+        if sell_first and not sell_back:
+            self._step("Start", False, f"not enough free cargo space ({free} t) for {qty} t. Tick 'Sell it again' "
+                                       f"to sell {name} first and buy it back.")
             return self._summary(t_start)
+        if free <= 0 and not sell_first:
+            self._step("Start", False, f"no free cargo space and no {name} on board to sell first")
+            return self._summary(t_start)
+        if sell_first:
+            qty = min(qty, on_board)
+            self.say(f"Market test: hold full, sell {qty} {name} first and buy it back.")
+        else:
+            qty = min(qty, free)
+            self.say(f"Market test: buy {qty} {name}" + (" and sell it again." if sell_back else "."))
+        self._step("Start", True, f"docked at {ap.jn.ship_state().get('cur_station')}, cargo {cargo0}/{cap} t, "
+                                  f"free {free} t, {name} on board {on_board} t")
 
         # 1. Market
         t0 = time.time()
@@ -99,73 +122,95 @@ class MarketTest:
         self._step("Open commodities market", bool(ok), "", t0)
         if not ok:
             return self._finish(t_start)
-
         real_name = self._find_name(name)
         if real_name is None:
             return self._finish(t_start)
-        if not mkt.market_parser.can_buy_item(real_name):
-            self._step("Commodity", False, f"'{real_name}' is not sold here or has no stock")
-            return self._finish(t_start)
 
-        # 2. Buy
+        if sell_first:
+            sold = self._sell(real_name, qty)
+            if sold > 0:
+                self._buy(real_name, sold)
+            else:
+                self._step("Buy back", None, "skipped, nothing was sold")
+        else:
+            bought = self._buy(real_name, qty)
+            if sell_back and bought > 0:
+                self._sell(real_name, bought)
+            elif sell_back:
+                self._step("Sell", None, "skipped, nothing was bought")
+
+        return self._finish(t_start)
+
+    def _check_market_state(self, what: str):
+        mkt = self.ap.stn_svcs_in_ship.commodities_market
+        self._step(f"Dialog after {what}", None, mkt.last_dialog_info or "-")
+        in_menu = mkt.in_station_menu()
+        self._step("Still in the market", not in_menu, "station menu shown!" if in_menu else "yes")
+
+    def _buy(self, real_name: str, qty: int) -> int:
+        """ Select BUY, buy qty, check the cargo. Returns the tons bought. """
+        ap = self.ap
+        mkt = ap.stn_svcs_in_ship.commodities_market
+        mkt.market_parser.get_market_data()
+        if not mkt.market_parser.can_buy_item(real_name):
+            self._step("Buy", False, f"'{real_name}' is not sold here or has no stock")
+            return 0
         t0 = time.time()
         ok = mkt.select_buy(ap.keys)
         self._step("Select BUY", ok is not False, "", t0)
         if ok is False:
-            return self._finish(t_start)
+            return 0
+        cap = ap.jn.ship_state().get('cargo_capacity') or 0
+        before = self._cargo()
+        t0 = time.time()
+        mkt.last_select_info = ''
+        mkt.last_dialog_info = ''
+        mkt.last_select_failed = False
+        _, act_qty = mkt.buy_commodity(ap.keys, real_name, qty, cap - before)
+        self._step(f"Find '{real_name}' in the BUY list", self._select_state(mkt), mkt.last_select_info or "-")
+        if mkt.last_select_failed or act_qty <= 0:
+            self._step("Buy", False, "nothing bought", t0)
+            return 0
+        after = self._wait_cargo_change(before)
+        bought = after - before
+        self._step("Buy", bought > 0, f"wanted {act_qty}, cargo {before} -> {after} t (+{bought})", t0)
+        self._check_market_state("buying")
+        return max(0, bought)
 
+    def _sell(self, real_name: str, qty: int) -> int:
+        """ Select SELL, sell qty, check the cargo. Returns the tons sold. """
+        ap = self.ap
+        mkt = ap.stn_svcs_in_ship.commodities_market
+        mkt.market_parser.get_market_data()
+        if not mkt.market_parser.can_sell_item(real_name):
+            self._step("Sell", False, f"this station does not buy '{real_name}'")
+            return 0
+        t0 = time.time()
+        ok = mkt.select_sell(ap.keys)
+        self._step("Select SELL", ok is not False, "", t0)
+        if ok is False:
+            return 0
+        cargo_parser = CargoParser()
+        t_wait = time.time()
+        cargo_parser.get_cargo_data()
+        while cargo_parser.get_item(real_name) is None and time.time() - t_wait < 6:
+            sleep(0.5)
+            cargo_parser.get_cargo_data()
+        if cargo_parser.get_item(real_name) is None:
+            self._step("Sell", False, f"'{real_name}' not found in Cargo.json")
+            return 0
         t0 = time.time()
         mkt.last_select_info = ''
         mkt.last_dialog_info = ''
         mkt.last_select_failed = False
         before = self._cargo()
-        _, act_qty = mkt.buy_commodity(ap.keys, real_name, qty, free)
-        self._step(f"Find '{real_name}' in the BUY list", self._select_state(mkt), mkt.last_select_info or "-")
-        if mkt.last_select_failed or act_qty <= 0:
-            self._step("Buy", False, "nothing bought", t0)
-            return self._finish(t_start)
-        after = self._wait_cargo_change(before)
-        bought = after - before
-        self._step("Buy", bought > 0, f"wanted {act_qty}, cargo {before} -> {after} t (+{bought})", t0)
-        self._step("Dialog after buying", None, mkt.last_dialog_info or "-")
-        in_menu = mkt.in_station_menu()
-        self._step("Still in the market", not in_menu, "station menu shown!" if in_menu else "yes")
-
-        # 3. Sell again
-        if sell_back and bought > 0:
-            t0 = time.time()
-            ok = mkt.select_sell(ap.keys)
-            self._step("Select SELL", ok is not False, "", t0)
-            if ok is not False:
-                cargo_parser = CargoParser()
-                t_wait = time.time()
-                cargo_parser.get_cargo_data()
-                while cargo_parser.get_item(real_name) is None and time.time() - t_wait < 6:
-                    sleep(0.5)
-                    cargo_parser.get_cargo_data()
-                if cargo_parser.get_item(real_name) is None:
-                    self._step("Cargo.json", False, f"'{real_name}' not found in Cargo.json")
-                elif not mkt.market_parser.can_sell_item(real_name):
-                    self._step("Sell", False, f"this station does not buy '{real_name}' back")
-                else:
-                    t0 = time.time()
-                    mkt.last_select_info = ''
-                    mkt.last_dialog_info = ''
-                    mkt.last_select_failed = False
-                    before = self._cargo()
-                    _, sell_qty = mkt.sell_commodity(ap.keys, real_name, bought, cargo_parser)
-                    self._step(f"Find '{real_name}' in the SELL list", self._select_state(mkt),
-                               mkt.last_select_info or "-")
-                    after = self._wait_cargo_change(before) if sell_qty > 0 else self._cargo()
-                    sold = before - after
-                    self._step("Sell", sold > 0, f"wanted {sell_qty}, cargo {before} -> {after} t (-{sold})", t0)
-                    self._step("Dialog after selling", None, mkt.last_dialog_info or "-")
-                    in_menu = mkt.in_station_menu()
-                    self._step("Still in the market", not in_menu, "station menu shown!" if in_menu else "yes")
-        elif sell_back:
-            self._step("Sell", None, "skipped, nothing was bought")
-
-        return self._finish(t_start)
+        _, sell_qty = mkt.sell_commodity(ap.keys, real_name, qty, cargo_parser)
+        self._step(f"Find '{real_name}' in the SELL list", self._select_state(mkt), mkt.last_select_info or "-")
+        after = self._wait_cargo_change(before) if sell_qty > 0 else self._cargo()
+        sold = before - after
+        self._step("Sell", sold > 0, f"wanted {sell_qty}, cargo {before} -> {after} t (-{sold})", t0)
+        self._check_market_state("selling")
+        return max(0, sold)
 
     def _finish(self, t_start: float) -> bool:
         try:

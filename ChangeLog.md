@@ -5,6 +5,8 @@
   step is checked and logged as '[Market test] OK/FAIL/INFO ...': market opened, BUY/SELL selected, commodity
   found in the list (OCR confirmed / counted position / failed), cargo before -> after, what happened with the
   dialog, still in the market. Summary at the end. Untick or STOP ALL stops it.
+- Market Test with a full hold (or not enough free space) and the commodity on board: sells the quantity first and
+  buys it back (the order of the trade route). Before it stopped with 'no free cargo space'.
 
 # 10/20/2026 v1.9.4 b29 (video analysis of session 2026-10-20_16-57-51)
 - FIX trade: after a sale/purchase the game now closes the BUY/SELL dialog itself. The UI_Back added in b24 then

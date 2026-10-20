@@ -1422,7 +1422,7 @@ class APGui:
         self._tip(spn_qty, "How many tons to buy. 1 t is enough to test the key sequences, use the full cargo "
                            "capacity to test it like the trade route.")
         self.market_test_sell = tk.BooleanVar(value=True)
-        ttk.Checkbutton(blk_market_test, text="Sell it again afterwards", variable=self.market_test_sell).grid(
+        ttk.Checkbutton(blk_market_test, text="Sell it again (full hold: sell first, buy back)", variable=self.market_test_sell).grid(
             row=2, column=0, columnspan=2, padx=2, pady=2, sticky="W")
         self.checkboxvar['Market Test'] = tk.BooleanVar()
         cb_market_test = ttk.Checkbutton(blk_market_test, text='Run Market Test', variable=self.checkboxvar['Market Test'],
