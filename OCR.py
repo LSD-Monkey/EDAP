@@ -1,4 +1,5 @@
 from __future__ import annotations
+import threading
 import time
 import cv2
 import numpy as np
@@ -29,6 +30,12 @@ class OCR:
         """
         self.ap = ed_ap
         self.screen = screen
+        # PaddleOCR is NOT thread safe. EDAP uses the same instance from the engine thread and from the
+        # Supercruise (SCO/disengage) monitoring thread. Two parallel predict() calls ended in 'OCR failed:
+        # Unknown exception'; the following re-initialisation while the other thread was still using the
+        # instance crashed the whole process ('Windows fatal exception: access violation', crash.log
+        # 2026-10-20 08:48). All PaddleOCR calls are serialised with this lock.
+        self._lock = threading.RLock()
         if self.ap.config['OCRMobile']:
             self.paddleocr = PaddleOCR(
                 use_doc_orientation_classify=False,
@@ -52,8 +59,12 @@ class OCR:
         an 'Unknown exception' which corrupts internal state. If the same instance is
         reused, the next call will cause a hard process crash with no Python traceback.
         Creating a fresh instance prevents this. """
+        logger.warning("Reinitializing PaddleOCR after failure.")
+        with self._lock:
+            self._reinit_paddleocr_locked()
+
+    def _reinit_paddleocr_locked(self):
         try:
-            logger.warning("Reinitializing PaddleOCR after failure.")
             if self.ap.config['OCRMobile']:
                 self.paddleocr = PaddleOCR(
                     use_doc_orientation_classify=False,
@@ -120,7 +131,8 @@ class OCR:
         try:
             # Remove Alpha channel if it exists
             image2 = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-            ocr_data = self.paddleocr.predict(image2)
+            with self._lock:
+                ocr_data = self.paddleocr.predict(image2)
 
             if ocr_data is None:
                 return None, None
@@ -171,7 +183,8 @@ class OCR:
         try:
             # Remove Alpha channel if it exists
             image2 = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-            ocr_data = self.paddleocr.predict(image2)
+            with self._lock:
+                ocr_data = self.paddleocr.predict(image2)
 
             # elapsed_time = time.time() - start_time
             # print(f"OCR took {elapsed_time} secs")

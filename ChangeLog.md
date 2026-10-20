@@ -1,3 +1,10 @@
+# 10/20/2026 v1.9.4 b26
+- FIX hard crash ('Windows fatal exception: access violation', crash.log 2026-10-20 08:48): PaddleOCR is not
+  thread safe, but the engine thread (Nav Panel) and the SC monitoring thread (disengage text) used the same
+  instance at the same time -> 'OCR failed: Unknown exception' -> re-initialisation while the other thread was
+  still inside predict() -> process crash. All PaddleOCR calls and the re-initialisation are serialised with a
+  lock now. Probably also the cause of earlier silent crashes during OCR.
+
 # 10/20/2026 v1.9.4 b25
 - Waypoint Assist restarts itself after an error instead of stopping (log 2026-10-20 08:32: 'mnvr_to_target
   failed 5 times'). 10 s pause, throttle 0, then it continues from the current position. Max.
