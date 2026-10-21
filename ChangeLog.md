@@ -1,3 +1,15 @@
+# 10/21/2026 v1.9.4 b39 - trade search: carriers
+- Trade tab: the age of BOTH prices is checked for every station (buy price at the seller and sell price at the
+  buyer). A market row without a date is no longer treated as fresh (warning with the field names in the log).
+  The details of a route show the age of each price ('Gold buy 25 min, sell 3 h').
+- Fleet carriers: stricter price age (new field next to 'Fleet carriers', default 6 h, setting
+  'TradeCarrierMaxAgeHours'); a carrier price without a date is not used. Carriers in the results are checked
+  against the EDSM station list of their system: carriers that are no longer there are removed ('carrier left the
+  system' in the skipped list). If EDSM can not be reached, or lists no carrier at all, the routes are kept.
+- Docking refused for good (carrier with restricted docking access, ship too large, hostile, offences): the
+  fail-safe takes another trade route at once instead of jumping out and back first. The reason is now part of
+  the 'Docking failed' message.
+
 # 10/21/2026 v1.9.4 b38 - fail-safe: Waypoint Assist never stops
 - NEW sell other cargo first (setting 'TradePreSellMinTons', default 100 t, 0 = off): when a trade route is started
   with more cargo on board than that which the route does not sell, EDAP searches the stations nearby that buy it

@@ -68,6 +68,7 @@ class TradeTab:
         self.v_jump = V()
         self.v_pad = V(value="L")
         self.v_count = V(value=str(cfg.get('TradeCommodityCount', 50)))
+        self.v_carrier_age = V(value=str(cfg.get('TradeCarrierMaxAgeHours', 6)))
         self.v_sort = V(value=cfg.get('TradeSortBy', "Profit per hour"))
         B = tk.BooleanVar
         self.v_carriers = B(value=bool(cfg.get('TradeIncludeCarriers', False)))
@@ -129,6 +130,13 @@ class TradeTab:
             w = ttk.Checkbutton(chk, text=text, variable=var)
             w.pack(side="left", padx=(0, 12))
             ToolTip(w, msg=tip, **TIP)
+            if var is self.v_carriers:
+                w = ttk.Label(chk, text="max. age (h):")
+                w.pack(side="left", padx=(0, 2))
+                ToolTip(w, msg="Carriers move and change their orders: buy AND sell price of a carrier must be newer "
+                               "than this. Carriers that EDSM no longer lists in the system are skipped.", **TIP)
+                ttk.Spinbox(chk, textvariable=self.v_carrier_age, from_=1, to=72, increment=1, width=4,
+                            justify=tk.RIGHT).pack(side="left", padx=(0, 12))
         lbl("Sort by:", 4, 4, "Order of the results.")
         ttk.Combobox(frm, textvariable=self.v_sort, values=list(SORT_KEYS), width=13, state="readonly").grid(
             row=4, column=5, sticky="W", pady=2)
@@ -251,14 +259,16 @@ class TradeTab:
                       commodity_count=self._num(self.v_count, 50, int),
                       jump_range=self._num(self.v_jump, 15),
                       secs_per_jump=float(self.ap.config.get('TradeSecsPerJump', 75)),
-                      secs_station=float(self.ap.config.get('TradeSecsPerStation', 340)))
+                      secs_station=float(self.ap.config.get('TradeSecsPerStation', 340)),
+                      carrier_max_age_hours=self._num(self.v_carrier_age, 6))
         cfg = self.ap.config
         cfg.update({'TradeSearchRadius': params['max_start_distance'], 'TradeMaxHopDistance': params['max_hop_distance'],
                     'TradeMaxArrivalLs': params['max_arrival_ls'], 'TradeMaxAgeHours': params['max_age_hours'],
                     'TradeMinVolume': params['min_volume'], 'TradeCommodityCount': params['commodity_count'],
                     'TradeIncludeCarriers': params['carriers'], 'TradeIncludeMegaships': params['megaships'],
                     'TradeIncludePlanetary': params['planetary'], 'TradeIncludeSettlements': params['settlements'],
-                    'TradeMode': self.v_mode.get(), 'TradeSortBy': self.v_sort.get()})
+                    'TradeMode': self.v_mode.get(), 'TradeSortBy': self.v_sort.get(),
+                    'TradeCarrierMaxAgeHours': params['carrier_max_age_hours']})
 
         self._busy = True
         self.btn_search.configure(state="disabled", text="Searching...")
@@ -378,6 +388,12 @@ class TradeTab:
                     f"{r['start_station']} for {r['back_sell']:,} cr: +{fmt_cr(r['back_total'])}.\n")
         elif r.get('round_trip'):
             txt += "Back: no profitable commodity, the ship flies back empty.\n"
+        def ag(h):
+            return "?" if h is None else (f"{h * 60:.0f} min" if h < 1 else f"{h:.0f} h")
+        ages = f"Price age: {r['out_name']} buy {ag(r.get('out_age_buy'))}, sell {ag(r.get('out_age_sell'))}"
+        if r.get('back_name'):
+            ages += f"; {r['back_name']} buy {ag(r.get('back_age_buy'))}, sell {ag(r.get('back_age_sell'))}"
+        txt += ages + ".\n"
         txt += (f"{'Round trip' if r.get('round_trip') else 'Trip'} ~{mins:.0f} min, {fmt_cr(r['profit_trip'])} cr, "
                 f"~{fmt_cr(r['profit_hour'])} cr/h. Capital needed: {fmt_cr(r['capital_needed'])} cr.")
         self.lbl_details.configure(text=txt)

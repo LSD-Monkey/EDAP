@@ -19,6 +19,7 @@ one directly with Waypoint Assist.
 | Jump range (ly) | Laden jump range, for the estimate of the jumps and the time. |
 | Commodities | Number of commodities searched, the most valuable first. More = slower, more results. |
 | Fleet carriers / Megaships / Planetary ports / Odyssey settlements | Include these stations. Off by default. |
+| Fleet carriers: max. age (h) | Buy and sell price of a carrier must be newer than this (default 6 h). Carriers that EDSM no longer lists in their system are skipped. Docking access of a carrier is not in the market data: if docking is refused, the fail-safe takes another route. |
 | Sort by | Profit per hour, profit per trip, distance between the stations, distance to start. Click a column header to sort by that column. |
 
 The search area is the max. distance to start plus the max. distance between the stations (max. 500 ly). A round

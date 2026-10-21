@@ -119,6 +119,23 @@ def age_hours(updated_at) -> float | None:
         return None
 
 
+AGE_KEYS = ('updatedAt', 'updated_at', 'updated', 'lastUpdated', 'timestamp', 'updatedAtDay')
+_age_key_warned = False
+
+
+def row_age(row: dict) -> float | None:
+    """ Age in hours of a market row (buy or sell order). Tries several field names: if a row has none of them
+    the age is unknown (None) and must not count as 'fresh'. """
+    global _age_key_warned
+    for k in AGE_KEYS:
+        if row.get(k):
+            return age_hours(row.get(k))
+    if not _age_key_warned:
+        _age_key_warned = True
+        logger.warning(f"Trade finder: market row without a date field, keys: {sorted(row.keys())}")
+    return None
+
+
 class ArdentClient:
     """ Minimal client of the Ardent Insight REST API with a small cache. """
 
@@ -235,6 +252,35 @@ def load_carrier_names(journal_dir: str, max_files: int = 400) -> dict[str, str]
     return CARRIER_NAMES
 
 
+_edsm_cache: dict[str, tuple[float, set | None]] = {}
+
+
+def edsm_carriers_in_system(system: str) -> set[str] | None:
+    """ Call signs of the fleet carriers EDSM lists in the system now, or None if EDSM can not be reached. """
+    hit = _edsm_cache.get(system.upper())
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    url = "https://www.edsm.net/api-system-v1/stations?" + urllib.parse.urlencode({'systemName': system})
+    result = None
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode('utf-8') or '{}')
+        if isinstance(data, dict) and isinstance(data.get('stations'), list):
+            result = set()
+            for st in data['stations']:
+                if 'carrier' in (st.get('type') or '').lower():
+                    m = CALLSIGN_RE.search((st.get('name') or '').upper())
+                    if m:
+                        result.add(m.group(1))
+            if not result:
+                result = None  # no carrier listed at all: EDSM may simply not know them, do not reject
+    except Exception as e:
+        logger.warning(f"EDSM stations of {system}: {e}")
+    _edsm_cache[system.upper()] = (time.time(), result)
+    return result
+
+
 def carrier_display_name(station: str | None) -> str:
     """ 'N6H-0XW' -> 'Legacy of caliban N6H-0XW' if the carrier was seen in the journals, else unchanged. """
     st = (station or '').strip()
@@ -344,7 +390,13 @@ class TradeFinder:
         dta = row.get('distanceToArrival')
         if dta is not None and f['max_arrival_ls'] and float(dta) > f['max_arrival_ls']:
             return 'too far from the star'
-        age = age_hours(row.get('updatedAt'))
+        age = row_age(row)
+        if stype in CARRIER_TYPES:
+            # Carriers move and change their orders: stricter age, and an unknown age is not accepted
+            if age is None:
+                return 'carrier price age unknown'
+            if age > min(f['max_age_hours'], f.get('carrier_max_age_hours', 6)):
+                return 'carrier price too old'
         if age is not None and age > f['max_age_hours']:
             return 'price too old'
         return ''
@@ -399,7 +451,8 @@ class TradeFinder:
                     carriers: bool = False, megaships: bool = False, planetary: bool = False,
                     settlements: bool = False, round_trips: bool = True, commodity_count: int = 80,
                     jump_range: float = 15.0, secs_per_jump: float = 75.0, secs_station: float = 340.0,
-                    max_results: int = 150, legs_per_commodity: int = 4000) -> list[dict]:
+                    max_results: int = 150, legs_per_commodity: int = 4000,
+                    carrier_max_age_hours: float = 6.0, check_carriers: bool = True) -> list[dict]:
         """ All sellers x all buyers of every commodity are paired (numpy), not only the cheapest/most expensive
         60 of the whole search area: with a large area the best buyer near a seller was often not among them, that
         was the main reason why Inara found better routes. """
@@ -408,7 +461,8 @@ class TradeFinder:
         cargo = max(1, int(cargo))
         min_volume = int(min_volume) if min_volume and min_volume > 0 else cargo
         f = dict(carriers=carriers, megaships=megaships, planetary=planetary, settlements=settlements,
-                 min_pad=min_pad, max_arrival_ls=max_arrival_ls, max_age_hours=max_age_hours)
+                 min_pad=min_pad, max_arrival_ls=max_arrival_ls, max_age_hours=max_age_hours,
+                 carrier_max_age_hours=carrier_max_age_hours)
         self.rejected = {}
         # Stations of a round trip are both start stations, so both need to be within the start distance plus
         # the distance between the stations (the closer one becomes the start).
@@ -451,11 +505,11 @@ class TradeFinder:
                 for r in sellers:
                     k = self._key(r)
                     stations.setdefault(k, self._station(r))
-                    sa[k] = (int(r['buyPrice']), int(r.get('stock') or 0), age_hours(r.get('updatedAt')))
+                    sa[k] = (int(r['buyPrice']), int(r.get('stock') or 0), row_age(r))
                 for r in buyers:
                     k = self._key(r)
                     stations.setdefault(k, self._station(r))
-                    ba[k] = (int(r['sellPrice']), int(r.get('demand') or 0), age_hours(r.get('updatedAt')))
+                    ba[k] = (int(r['sellPrice']), int(r.get('demand') or 0), row_age(r))
                 sell_at[sym], buy_at[sym] = sa, ba
                 if sa and ba:
                     sk, bk = list(sa), list(ba)
@@ -490,6 +544,7 @@ class TradeFinder:
                                     'profit': int(profit[i, j]), 'amount': int(amount[i, j]), 'total': int(t),
                                     'distance': float(dist[i, j]), 'age_h': max(ages) if ages else None,
                                     'supply': sa[sk[i]][1], 'demand': ba[bk[j]][1],
+                                    'age_buy': sa[sk[i]][2], 'age_sell': ba[bk[j]][2],
                                 }
                 self.progress(f"Commodities checked: {done}/{len(symbols)}, {len(legs)} trades found.")
 
@@ -516,7 +571,8 @@ class TradeFinder:
                     best = {'symbol': sym, 'name': names[sym], 'buy': s_[0], 'sell': b_[0], 'profit': profit,
                             'amount': amount, 'total': total,
                             'distance': self._dist(stations[ka], stations[kb]) or 0.0,
-                            'age_h': max(ages) if ages else None, 'supply': s_[1], 'demand': b_[1]}
+                            'age_h': max(ages) if ages else None, 'supply': s_[1], 'demand': b_[1],
+                            'age_buy': s_[2], 'age_sell': b_[2]}
             return best
 
         routes = []
@@ -545,9 +601,45 @@ class TradeFinder:
                 routes.append(self._route(a, b, out, None, jump_range, secs_per_jump, secs_station, False))
 
         routes.sort(key=lambda r: r['profit_hour'], reverse=True)
+        if carriers and check_carriers:
+            routes = self._check_carriers(routes, max_results)
         self.progress(f"{len(routes)} {'round trips' if round_trips else 'trades'} found "
                       f"({self.client.requests} requests).")
         return routes[:max_results]
+
+    def _check_carriers(self, routes: list[dict], max_results: int) -> list[dict]:
+        """ Carriers in the best routes: are they still in the system? (EDSM station list of the system, kept up to
+        date by the carrier jumps reported via EDDN). Routes with a carrier that is no longer there are removed.
+        If EDSM can not be reached the routes are kept. """
+        out, systems = [], {}
+        checked = 0
+        for r in routes:
+            if len(out) >= max_results:
+                break
+            ok = True
+            for sys_key, st_key, type_key in (('start_system', 'start_station', 'start_type'),
+                                              ('system', 'station', 'station_type')):
+                if _norm(r.get(type_key) or '') not in CARRIER_TYPES:
+                    continue
+                system = r[sys_key]
+                if system not in systems:
+                    if checked >= 60:
+                        systems[system] = None  # do not ask EDSM for too many systems
+                    else:
+                        checked += 1
+                        self.progress(f"Checking fleet carriers in {system} (EDSM)...")
+                        systems[system] = edsm_carriers_in_system(system)
+                present = systems[system]
+                if present is None:
+                    continue  # unknown
+                m = CALLSIGN_RE.search((r[st_key] or '').upper())
+                if m and m.group(1) not in present:
+                    ok = False
+                    self.rejected['carrier left the system'] = self.rejected.get('carrier left the system', 0) + 1
+                    break
+            if ok:
+                out.append(r)
+        return out
 
     @staticmethod
     def _route(a: dict, b: dict, out: dict, back: dict | None, jump_range: float, secs_per_jump: float,
@@ -566,7 +658,9 @@ class TradeFinder:
             'arrival_ls': b['arrival_ls'], 'distance': out['distance'], 'jumps': jumps, 'trip_secs': secs,
             'out_name': out['name'], 'out_buy': out['buy'], 'out_sell': out['sell'], 'out_profit': out['profit'],
             'out_amount': out['amount'], 'out_total': out['total'], 'out_supply': out['supply'],
-            'out_demand': out['demand'],
+            'out_demand': out['demand'], 'out_age_buy': out.get('age_buy'), 'out_age_sell': out.get('age_sell'),
+            'back_age_buy': back.get('age_buy') if back else None,
+            'back_age_sell': back.get('age_sell') if back else None,
             'back_name': back['name'] if back else '', 'back_buy': back['buy'] if back else 0,
             'back_sell': back['sell'] if back else 0, 'back_profit': back['profit'] if back else 0,
             'back_amount': back['amount'] if back else 0, 'back_total': back['total'] if back else 0,

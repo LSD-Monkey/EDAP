@@ -95,6 +95,15 @@ class WaypointRecovery:
             else:
                 return
 
+        # Docking refused for good (carrier with restricted docking access, too large, hostile): jumping out and
+        # back or waiting does not help, take another route at once.
+        if any(k in reason for k in ('RestrictedAccess', 'TooLarge', 'Hostile', 'Offences')) and \
+                self._cfg('WaypointRecoveryNewRoute', True):
+            self.log(f"Fail-safe: docking not possible ({reason}). Searching another trade route.", True)
+            if self.start_new_route():
+                self.reset()
+                return
+
         n = max(1, self._cfg('WaypointRecoveryJumps', 3))
         if self.stage_jumps < n:
             self.stage_jumps += 1
@@ -410,7 +419,8 @@ class WaypointRecovery:
                       commodity_count=int(cfg.get('TradeCommodityCount', 80)),
                       jump_range=self._jump_range(),
                       secs_per_jump=float(cfg.get('TradeSecsPerJump', 75)),
-                      secs_station=float(cfg.get('TradeSecsPerStation', 340)))
+                      secs_station=float(cfg.get('TradeSecsPerStation', 340)),
+                      carrier_max_age_hours=float(cfg.get('TradeCarrierMaxAgeHours', 6)))
         try:
             if jd:
                 load_carrier_names(jd)
@@ -509,7 +519,8 @@ def _presell_cargo(ap) -> bool:
                 planetary=bool(cfg.get('TradeIncludePlanetary', False)),
                 settlements=bool(cfg.get('TradeIncludeSettlements', False)),
                 min_pad=rec._need_pad(), max_arrival_ls=float(cfg.get('TradeMaxArrivalLs', 5000)),
-                max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 24))))
+                max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 24))),
+                carrier_max_age_hours=float(cfg.get('TradeCarrierMaxAgeHours', 6)))
     radius = min(200.0, float(cfg.get('TradeSearchRadius', 50)))
     client = ArdentClient()
     finder = TradeFinder(client)

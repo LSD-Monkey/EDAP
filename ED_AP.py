@@ -452,6 +452,7 @@ class EDAutopilot:
             "WaypointRecoveryNewRoute": True,  # fail-safe: start another trade route if still failing after the wait
             "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel
             "TradePreSellMinTons": 100,  # trade route start: sell other cargo above this first (0 = off)
+            "TradeCarrierMaxAgeHours": 6,  # Trade tab: max. age of carrier prices (carriers move, change orders)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -570,7 +571,7 @@ class EDAutopilot:
                 cnf['WaypointStationRetries'] = 3
             for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
                          ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
-                         ('TradePreSellMinTons', 100)):
+                         ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6)):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
@@ -1764,7 +1765,8 @@ class EDAutopilot:
         if not granted:
             self.ap_ckb('log', 'Docking denied: '+str(self.jn.ship_state()['no_dock_reason']))
             logger.warning('Did not get docking authorization, reason:'+str(self.jn.ship_state()['no_dock_reason']))
-            raise Exception('Docking failed (Did not get docking authorization)')
+            raise Exception(f"Docking failed (Did not get docking authorization: "
+                            f"{self.jn.ship_state()['no_dock_reason']})")
         else:
             self.ap_ckb('log+vce', "Docking request granted")
             # allow auto dock to take over
