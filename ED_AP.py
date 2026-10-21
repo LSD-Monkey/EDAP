@@ -22,7 +22,7 @@ from EDGalaxyMap import EDGalaxyMap
 from EDGraphicsSettings import EDGraphicsSettings
 from EDShipControl import EDShipControl, CompassTargetOffset
 from EDStationServicesInShip import EDStationServicesInShip
-from EDRecovery import WaypointRecovery
+from EDRecovery import WaypointRecovery, presell_cargo
 from EDSystemMap import EDSystemMap
 from EDlogger import logging
 import Image_Templates
@@ -443,14 +443,15 @@ class EDAutopilot:
             "WaypointAutoRestarts": 3,  # Waypoint Assist restarts itself after an error, max. this often in a row
             "SCAssistStallTime": 60,  # In-game SC Assist: secs without change of the distance to the target = stuck
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
-            "TradeBuyAttempts": 2,
-            "SCEngageTimeout": 120,
-            "SCStarAheadPercent": 12,
+            "TradeBuyAttempts": 2,  # Waypoint: attempts to buy a commodity (market left and entered again between)
+            "SCEngageTimeout": 120,  # s: max. time mass locked before giving up entering supercruise
+            "SCStarAheadPercent": 12,  # %: star covering this much of the view ahead -> fly around it, 0 = off
             "WaypointNeverStop": True,  # Waypoint fail-safe: never stop on errors (jump out/back, wait, new route)
             "WaypointRecoveryJumps": 3,  # fail-safe: attempts 'jump to a neighbour system and back' per stage
             "WaypointRecoveryWait": 30,  # fail-safe: minutes to wait outside the system before trying again
             "WaypointRecoveryNewRoute": True,  # fail-safe: start another trade route if still failing after the wait
-            "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel  # %: star covering this much of the view ahead -> fly around it, 0 = off  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
+            "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel
+            "TradePreSellMinTons": 100,  # trade route start: sell other cargo above this first (0 = off)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -568,7 +569,8 @@ class EDAutopilot:
             if 'WaypointStationRetries' not in cnf:
                 cnf['WaypointStationRetries'] = 3
             for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
-                         ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25)):
+                         ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
+                         ('TradePreSellMinTons', 100)):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
@@ -4200,7 +4202,16 @@ class EDAutopilot:
             last_restart = 0.0
             never_stop = bool(self.config.get('WaypointNeverStop', True))
             recovery = WaypointRecovery(self) if never_stop else None
-            while True:
+            # Trade route started with other cargo on board (> 'TradePreSellMinTons'): sell it profitably first
+            stopped = False
+            try:
+                if self.waypoint.waypoints and int(self.config.get('TradePreSellMinTons', 100) or 0) > 0:
+                    presell_cargo(self)
+            except EDAP_Interrupt:
+                logger.debug("Caught stop exception while selling the cargo first")
+                self._release_keys_safe()
+                stopped = True
+            while not stopped:
                 failure = None
                 try:
                     self._low_fuel_abort = False

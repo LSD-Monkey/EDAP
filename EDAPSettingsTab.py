@@ -69,6 +69,10 @@ SETTINGS: list[dict] = [
          min=5, max=80, tip="With the fail-safe on: below this fuel level (or if the fuel check says the route can "
                             "not be flown) the jumps stop and the ship docks at the nearest station with a fitting "
                             "pad to refuel, then continues."),
+    dict(section="Waypoint Assist", key="TradePreSellMinTons", label="Sell other cargo first above (t)",
+         type="int", min=0, max=2000, tip="Starting a trade route with more than this many tons on board that the "
+                                          "route does not sell: fly to the most profitable station nearby (Trade tab "
+                                          "filters), sell it, then start the route. 0 = off."),
     dict(section="Waypoint Assist", key="SCEngageTimeout", label="Max. time mass locked (s)", type="int",
          min=30, max=600, tip="Entering supercruise is given up after this time mass locked. A FSD cooldown is "
                               "waited for, 'Supercruise' is pressed up to 4 times. Then the station is tried again "

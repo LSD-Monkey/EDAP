@@ -1,4 +1,8 @@
 # 10/21/2026 v1.9.4 b38 - fail-safe: Waypoint Assist never stops
+- NEW sell other cargo first (setting 'TradePreSellMinTons', default 100 t, 0 = off): when a trade route is started
+  with more cargo on board than that which the route does not sell, EDAP searches the stations nearby that buy it
+  (Ardent, Trade tab filters and radius, ship pad size), takes the one with the highest revenue for the whole load
+  (among those within 3% of the best: the closest), flies there, sells it and then starts the route.
 - NEW fail-safe for Waypoint Assist / trade routes (setting 'WaypointNeverStop', on by default). Instead of
   stopping on an error (station not reached, trade failed, Galaxy Map / Nav Panel failed, jump failed, any
   exception) it escalates:

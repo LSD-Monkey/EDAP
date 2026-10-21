@@ -445,3 +445,133 @@ class WaypointRecovery:
                      f"Saved as waypoints/{name}.json.", True)
             return True
         return False
+
+
+# ----------------------------------------------------------------------------------------------------------------
+def presell_cargo(ap) -> bool:
+    """ Start of a trade route with cargo on board that the route does not sell ('TradePreSellMinTons', default
+    100 t): sell it first at the most profitable station nearby, then start the route. The station with the highest
+    revenue for the whole load is chosen; among stations within 3% of the best revenue the closest one.
+    Returns True if something was sold (or nothing had to be done). Never raises except on STOP. """
+    try:
+        return _presell_cargo(ap)
+    except Exception as e:
+        if _is_interrupt(e):
+            raise
+        logger.exception("presell cargo")
+        ap.ap_ckb('log', f"Selling the cargo first failed: {e}. Starting the route anyway.")
+        return False
+
+
+def _presell_cargo(ap) -> bool:
+    from CargoParser import CargoParser
+    from EDTradeFinder import ArdentClient, TradeFinder, display_name, _norm
+
+    cfg = ap.config
+    min_tons = int(cfg.get('TradePreSellMinTons', 100) or 0)
+    if min_tons <= 0:
+        return True
+    wps = getattr(ap.waypoint, 'waypoints', {}) or {}
+    route_sells, is_trade = set(), False
+    for k, wp in wps.items():
+        if not isinstance(wp, dict) or k == 'GlobalShoppingList':
+            continue
+        if wp.get('SellCommodities') or wp.get('BuyCommodities'):
+            is_trade = True
+        for name in (wp.get('SellCommodities') or {}):
+            route_sells.add(_norm(name))
+    if not is_trade or 'all' in route_sells:
+        return True
+
+    cp = CargoParser()
+    cp.get_cargo_data()
+    foreign = []
+    for it in cp.get_items() or []:
+        sym = it.get('Name') or ''
+        loc = it.get('Name_Localised') or display_name(sym)
+        cnt = int(it.get('Count') or 0) - int(it.get('Stolen') or 0)
+        if cnt > 0 and _norm(sym) not in route_sells and _norm(loc) not in route_sells:
+            foreign.append({'sym': _norm(sym), 'name': loc, 'count': cnt})
+    tons = sum(f['count'] for f in foreign)
+    if tons < min_tons:
+        if tons:
+            ap.ap_ckb('log', f"{tons} t cargo that the route does not sell (below {min_tons} t), starting the route.")
+        return True
+
+    rec = WaypointRecovery(ap)
+    cur = ap.jn.ship_state().get('cur_star_system') or ''
+    what = ", ".join(f"{f['count']} t {f['name']}" for f in foreign)
+    ap.ap_ckb('log+vce', f"Cargo on board that the route does not sell: {what}. Selling it first.")
+    ap.update_ap_status("Selling the cargo first")
+
+    filt = dict(carriers=bool(cfg.get('TradeIncludeCarriers', False)),
+                megaships=bool(cfg.get('TradeIncludeMegaships', False)),
+                planetary=bool(cfg.get('TradeIncludePlanetary', False)),
+                settlements=bool(cfg.get('TradeIncludeSettlements', False)),
+                min_pad=rec._need_pad(), max_arrival_ls=float(cfg.get('TradeMaxArrivalLs', 5000)),
+                max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 24))))
+    radius = min(200.0, float(cfg.get('TradeSearchRadius', 50)))
+    client = ArdentClient()
+    finder = TradeFinder(client)
+    stations: dict[str, dict] = {}
+    for f in foreign:
+        rows = []
+        for min_vol in (f['count'], 1):
+            try:
+                rows = client.nearby('imports', cur, f['sym'], radius, min_vol, filt['max_age_hours'] / 24.0,
+                                     filt['carriers']) or []
+            except Exception as e:
+                logger.warning(f"presell: Ardent imports {f['sym']}: {e}")
+                rows = []
+            if rows:
+                break
+        for r in rows:
+            price = int(r.get('sellPrice') or 0)
+            if price <= 0 or finder.station_reject_reason(r, filt):
+                continue
+            key = f"{r.get('systemName')}|{r.get('stationName')}"
+            st = stations.setdefault(key, {'system': r.get('systemName'), 'station': r.get('stationName'),
+                                           'distance': float(r.get('distance') or 0),
+                                           'arrival_ls': float(r.get('distanceToArrival') or 0),
+                                           'revenue': 0, 'sells': {}})
+            qty = min(f['count'], int(r.get('demand') or f['count']) or f['count'])
+            st['revenue'] += price * qty
+            st['sells'][f['name']] = price
+    if not stations:
+        ap.ap_ckb('log+vce', "No station nearby buys the cargo. Starting the route.")
+        return False
+    best_rev = max(s['revenue'] for s in stations.values())
+    good = [s for s in stations.values() if s['revenue'] >= 0.97 * best_rev]
+    best = min(good, key=lambda s: (s['distance'], s['arrival_ls']))
+    prices = ", ".join(f"{n} {p:,} cr" for n, p in best['sells'].items())
+    ap.ap_ckb('log+vce', f"Selling at {best['station']} in {best['system']} ({best['distance']:.1f} ly, "
+                         f"{best['arrival_ls']:.0f} Ls): {prices}, about {best['revenue'] / 1e6:.1f} M cr.")
+
+    # Fly there (unless docked at that station already)
+    from EDAP_data import FlagsDocked
+    state = ap.jn.ship_state()
+    here = (ap.status.get_flag(FlagsDocked) and (state.get('cur_station') or '').upper() == best['station'].upper()
+            and (state.get('cur_star_system') or '').upper() == best['system'].upper())
+    if not here:
+        if best['system'].upper() != cur.upper() and not rec._plot_and_jump(best['system']):
+            ap.ap_ckb('log+vce', f"Could not reach {best['system']} to sell the cargo. Starting the route.")
+            return False
+        ap.supercruise_to_station(ap.scrReg, best['station'])
+        sleep(2)
+        if not ap.status.get_flag(FlagsDocked):
+            ap.ap_ckb('log+vce', f"Not docked at {best['station']}, cargo not sold. Starting the route.")
+            return False
+
+    # Sell with the normal trade code (temporary waypoint)
+    wp = ap.waypoint
+    key = '_PRESELL'
+    wps[key] = {"SystemName": best['system'], "StationName": best['station'],
+                "SellCommodities": {f['name']: 9999 for f in foreign}, "BuyCommodities": {},
+                "FleetCarrierTransfer": False, "UpdateCommodityCount": False, "Skip": True, "Completed": True}
+    try:
+        wp.execute_trade(ap, key)
+    finally:
+        wps.pop(key, None)
+    left = int(ap.status.get_cleaned_data().get('Cargo') or 0)
+    ap.ap_ckb('log+vce', f"Cargo sold, {left} t left on board. Starting the trade route.")
+    return True
