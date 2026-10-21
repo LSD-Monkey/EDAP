@@ -22,6 +22,7 @@ from EDGalaxyMap import EDGalaxyMap
 from EDGraphicsSettings import EDGraphicsSettings
 from EDShipControl import EDShipControl, CompassTargetOffset
 from EDStationServicesInShip import EDStationServicesInShip
+from EDRecovery import WaypointRecovery
 from EDSystemMap import EDSystemMap
 from EDlogger import logging
 import Image_Templates
@@ -444,7 +445,12 @@ class EDAutopilot:
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
             "TradeBuyAttempts": 2,
             "SCEngageTimeout": 120,
-            "SCStarAheadPercent": 12,  # %: star covering this much of the view ahead -> fly around it, 0 = off  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
+            "SCStarAheadPercent": 12,
+            "WaypointNeverStop": True,  # Waypoint fail-safe: never stop on errors (jump out/back, wait, new route)
+            "WaypointRecoveryJumps": 3,  # fail-safe: attempts 'jump to a neighbour system and back' per stage
+            "WaypointRecoveryWait": 30,  # fail-safe: minutes to wait outside the system before trying again
+            "WaypointRecoveryNewRoute": True,  # fail-safe: start another trade route if still failing after the wait
+            "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel  # %: star covering this much of the view ahead -> fly around it, 0 = off  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -561,6 +567,9 @@ class EDAutopilot:
                 cnf['SCAssistStallTime'] = 60
             if 'WaypointStationRetries' not in cnf:
                 cnf['WaypointStationRetries'] = 3
+            for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
+                         ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25)):
+                cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
             if 'SCEngageTimeout' not in cnf:
@@ -3113,8 +3122,13 @@ class EDAutopilot:
 
                 self.position(scr_reg, refueled)
 
-                if self.jn.ship_state()['fuel_percent'] < self.config['FuelThreasholdAbortAP']:
+                fuel_limit = self.config['FuelThreasholdAbortAP']
+                if self.waypoint_assist_enabled and self.config.get('WaypointNeverStop', True):
+                    # Waypoint fail-safe: stop the route early enough to reach a station for fuel
+                    fuel_limit = max(fuel_limit, float(self.config.get('RefuelStopPercent', 25)))
+                if self.jn.ship_state()['fuel_percent'] < fuel_limit:
                     if self.jn.ship_state()['target']:
+                        self._low_fuel_abort = True
                         self.ap_ckb('log', "AP Aborting, low fuel")
                         self.vce.say("AP Aborting, low fuel")
                         return FSDAssistReturn.Failed
@@ -4004,6 +4018,10 @@ class EDAutopilot:
                     stop_sent = False
                     continue
                 if stop_sent:
+                    # Waypoint fail-safe waits for the game: watch again once it is playable
+                    if self.game_is_playable():
+                        stop_sent = False
+                        flags_zero_since = None
                     continue
                 reason = ''
                 state = self._journal_tail_game_state()
@@ -4030,7 +4048,9 @@ class EDAutopilot:
         """ Stops the running assist because the game is not playable (connection lost, main menu, closed). """
         self._game_stop_reason = reason
         logger.warning(f"Game not running: {reason}")
-        self.ap_ckb('log+vce', f"Connection to the game lost or game not running: {reason}. Stopping the assist.")
+        never_stop = self.waypoint_assist_enabled and self.config.get('WaypointNeverStop', True)
+        self.ap_ckb('log+vce', f"Connection to the game lost or game not running: {reason}. " +
+                    ("Waiting for the game." if never_stop else "Stopping the assist."))
         if from_engine:
             raise EDAP_GameNotRunning(reason)
         if self.ap_thread is not None and self.ap_thread.is_alive():
@@ -4178,15 +4198,28 @@ class EDAutopilot:
             max_restarts = int(self.config.get('WaypointAutoRestarts', 3))
             restarts = 0
             last_restart = 0.0
+            never_stop = bool(self.config.get('WaypointNeverStop', True))
+            recovery = WaypointRecovery(self) if never_stop else None
             while True:
+                failure = None
                 try:
+                    self._low_fuel_abort = False
                     self.waypoint_assist(self.keys, self.scrReg)
-                    break
+                    if not getattr(self.waypoint, 'aborted', False):
+                        break  # route complete
+                    failure = getattr(self.waypoint, 'abort_reason', '') or 'aborted'
                 except EDAP_GameNotRunning:
                     logger.debug("Caught game not running exception")
-                    self.ap_ckb('log', f"Waypoint Assist stopped: {getattr(self, '_game_stop_reason', '') or 'game not running'}.")
                     self._release_keys_safe()
-                    break
+                    if not never_stop:
+                        self.ap_ckb('log', f"Waypoint Assist stopped: {getattr(self, '_game_stop_reason', '') or 'game not running'}.")
+                        break
+                    try:
+                        recovery.wait_for_game()
+                    except EDAP_Interrupt:
+                        self._release_keys_safe()
+                        break
+                    continue
                 except EDAP_Interrupt:
                     logger.debug("Caught stop exception")
                     self._release_keys_safe()
@@ -4196,32 +4229,62 @@ class EDAutopilot:
                     logger.debug("Waypoint Assist trapped generic:"+str(e))
                     self.ap_ckb('log', "Waypoint Assist stopped with error: "+str(e))
                     traceback.print_exc()
-                    if time.time() - last_restart > 1200:
-                        restarts = 0  # the last restart was > 20 min ago, count again
-                    if restarts >= max_restarts:
-                        self.ap_ckb('log+vce', f"Waypoint Assist failed {restarts + 1} times in a row, giving up.")
-                        break
-                    if self.config.get('GameConnectionCheck', True) and not self.game_is_playable():
-                        self.ap_ckb('log+vce', "Game is not in flight (main menu, closed or disconnected), "
-                                               "no restart of Waypoint Assist.")
-                        break
-                    restarts += 1
-                    last_restart = time.time()
+                    failure = f"error: {e}"
+                    if not never_stop:
+                        if time.time() - last_restart > 1200:
+                            restarts = 0  # the last restart was > 20 min ago, count again
+                        if restarts >= max_restarts:
+                            self.ap_ckb('log+vce', f"Waypoint Assist failed {restarts + 1} times in a row, giving up.")
+                            break
+                        if self.config.get('GameConnectionCheck', True) and not self.game_is_playable():
+                            self.ap_ckb('log+vce', "Game is not in flight (main menu, closed or disconnected), "
+                                                   "no restart of Waypoint Assist.")
+                            break
+                        restarts += 1
+                        last_restart = time.time()
+                        try:
+                            self._release_keys_safe()
+                            self.stop_sco_monitoring()
+                            self.set_throttle_0()
+                            delay = float(self.config.get('WaypointRestartDelay', 10))
+                            self.ap_ckb('log+vce', f"Restarting Waypoint Assist in {delay:.0f} seconds "
+                                                   f"({restarts} of {max_restarts}).")
+                            sleep(delay)
+                        except EDAP_Interrupt:
+                            logger.debug("Caught stop exception while waiting for the restart")
+                            self._release_keys_safe()
+                            break
+                        except Exception as e2:
+                            logger.warning(f"Waypoint Assist restart preparation failed: {e2}")
+                        self.update_ap_status("Waypoint Assist restart")
+                        continue
+
+                if not never_stop:
+                    break  # aborted route, old behaviour: stop
+                # Fail-safe: never stop. Jump out and back, wait, other trade route, refuel stop.
+                try:
+                    self._release_keys_safe()
+                    self.stop_sco_monitoring()
+                    recovery.handle_failure(failure)
+                except EDAP_GameNotRunning:
                     try:
-                        self._release_keys_safe()
-                        self.stop_sco_monitoring()
-                        self.set_throttle_0()
-                        delay = float(self.config.get('WaypointRestartDelay', 10))
-                        self.ap_ckb('log+vce', f"Restarting Waypoint Assist in {delay:.0f} seconds "
-                                               f"({restarts} of {max_restarts}).")
-                        sleep(delay)
+                        recovery.wait_for_game()
                     except EDAP_Interrupt:
-                        logger.debug("Caught stop exception while waiting for the restart")
                         self._release_keys_safe()
                         break
-                    except Exception as e2:
-                        logger.warning(f"Waypoint Assist restart preparation failed: {e2}")
-                    self.update_ap_status("Waypoint Assist restart")
+                except EDAP_Interrupt:
+                    logger.debug("Caught stop exception during the fail-safe")
+                    self._release_keys_safe()
+                    break
+                except Exception as e3:
+                    logger.exception("fail-safe step failed")
+                    self.ap_ckb('log', f"Fail-safe step failed: {e3}. Trying again in 60 s.")
+                    try:
+                        sleep(60)
+                    except EDAP_Interrupt:
+                        self._release_keys_safe()
+                        break
+                self.update_ap_status("Waypoint Assist restart")
 
             self.stop_sco_monitoring()
             self.waypoint_assist_enabled = False

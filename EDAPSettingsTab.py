@@ -54,6 +54,21 @@ SETTINGS: list[dict] = [
                                          "a station."),
     dict(section="Waypoint Assist", key="WaypointStationRetries", label="Attempts to reach a station", type="int",
          min=1, max=20, tip="Waypoint Assist stops after this many failed attempts in a row to reach a station."),
+    dict(section="Waypoint Assist", key="WaypointNeverStop", label="Fail-safe: never stop", type="bool",
+         tip="Waypoint Assist does not stop on errors: 1) jump to a neighbour system and back, 2) leave the system "
+             "and wait, 3) start another trade route. Low fuel: fuel stop at the nearest station. Main menu / "
+             "connection lost: wait until the game is playable again. Only STOP stops it."),
+    dict(section="Waypoint Assist", key="WaypointRecoveryJumps", label="Fail-safe: jumps out and back", type="int",
+         min=1, max=10, tip="How often the fail-safe jumps to a neighbour system and back before the long wait."),
+    dict(section="Waypoint Assist", key="WaypointRecoveryWait", label="Fail-safe: wait (min)", type="int",
+         min=1, max=240, tip="Minutes to wait outside the system when jumping out and back did not help."),
+    dict(section="Waypoint Assist", key="WaypointRecoveryNewRoute", label="Fail-safe: start another trade route",
+         type="bool", tip="Still failing after the wait: search trade routes around the ship with the Trade tab "
+                          "filters and start the best one without the stations of the failed route."),
+    dict(section="Waypoint Assist", key="RefuelStopPercent", label="Fuel stop below (%)", type="int",
+         min=5, max=80, tip="With the fail-safe on: below this fuel level (or if the fuel check says the route can "
+                            "not be flown) the jumps stop and the ship docks at the nearest station with a fitting "
+                            "pad to refuel, then continues."),
     dict(section="Waypoint Assist", key="SCEngageTimeout", label="Max. time mass locked (s)", type="int",
          min=30, max=600, tip="Entering supercruise is given up after this time mass locked. A FSD cooldown is "
                               "waited for, 'Supercruise' is pressed up to 4 times. Then the station is tried again "

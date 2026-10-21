@@ -1,3 +1,21 @@
+# 10/21/2026 v1.9.4 b38 - fail-safe: Waypoint Assist never stops
+- NEW fail-safe for Waypoint Assist / trade routes (setting 'WaypointNeverStop', on by default). Instead of
+  stopping on an error (station not reached, trade failed, Galaxy Map / Nav Panel failed, jump failed, any
+  exception) it escalates:
+  1. 'WaypointRecoveryJumps' (3) times: jump to a neighbour system (the one the ship came from, else the nearest
+     from EDSM), then the route continues and flies back.
+  2. Still failing: leave the system and wait 'WaypointRecoveryWait' (30) minutes, then try again.
+  3. Still failing: start another trade route ('WaypointRecoveryNewRoute') found with the Trade tab filters around
+     the current system, without the stations of the failed route (saved as waypoints/trade_*.json).
+  The stages start again once a waypoint is completed.
+- NEW fuel stop: low fuel no longer stops the route. Below 'RefuelStopPercent' (25%) during the jumps, or when the
+  fuel check says the route can not be flown, the ship flies to the nearest station with a fitting landing pad
+  (Ardent: stations trading hydrogen fuel, fewest jumps, close to the star; without internet a station with
+  refuel from the journals), docks (refuel + repair) and continues. Full tank but route too long: it flies anyway
+  and makes the fuel stop on the way.
+- Main menu / connection lost / game closed: Waypoint Assist waits until the game is playable again instead of
+  stopping. STOP by the user always stops.
+
 # 10/21/2026 v1.9.4 b37
 - Trade tab: fleet carriers are shown with their name ('Legacy of caliban N6H-0XW' instead of 'N6H-0XW'). The
   market data (EDDN/Ardent) only has the call sign; the names come from your journals (every carrier seen in a

@@ -580,6 +580,8 @@ class EDWayPoint:
         """ Processes the waypoints, performing jumps and sc assist if going to a station
         also can then perform trades if specific in the waypoints file.
         """
+        self.aborted = False
+        self.abort_reason = ''
         if len(self.waypoints) == 0:
             self.ap_ckb('log+vce', "No Waypoint file loaded. Exiting Waypoint Assist.")
             return
@@ -593,8 +595,11 @@ class EDWayPoint:
         # instead of undocking and flying to the first open waypoint.
         self._start_at_docked_station()
 
-        # Loop until complete, or error
+        # Loop until complete, or error. The reason of an abort is kept for the fail-safe (EDRecovery).
         _abort = False
+        self.aborted = False
+        self.abort_reason = ''
+        never_stop = bool(self.ap.config.get('WaypointNeverStop', True))
         station_fail_cnt = 0  # failed attempts in a row to reach the current station
         max_station_fails = max(1, int(self.ap.config.get('WaypointStationRetries', 3)))
         while not _abort:
@@ -686,13 +691,21 @@ class EDWayPoint:
                         self.ap_ckb('log', f"System has been targeted.")
                     else:
                         self.ap_ckb('log+vce', f"Unable to target {next_wp_system} in Galaxy Map.")
+                        self.abort_reason = f"could not target {next_wp_system} in the Galaxy Map"
                         _abort = True
                         break
 
                 # Enough fuel for the plotted route? (ships without fuel scoop)
                 if not self._fuel_ok_for_route():
-                    _abort = True
-                    break
+                    fuel_pct = float(self.ap.jn.ship_state().get('fuel_percent') or 0)
+                    if never_stop and fuel_pct >= 90:
+                        # Full tank and still not enough: the route needs a fuel stop on the way. Fly; below
+                        # 'RefuelStopPercent' the jumps stop and the fail-safe flies to the nearest station.
+                        self.ap_ckb('log+vce', "Tank is full, flying anyway. A fuel stop is made on the way if needed.")
+                    else:
+                        self.abort_reason = "low_fuel"
+                        _abort = True
+                        break
 
                 # Select next target system
                 # TODO should this be in before every jump?
@@ -703,6 +716,8 @@ class EDWayPoint:
                 res = self.ap.jump_to_system(scr_reg)
                 if not res:
                     self.ap_ckb('log', f"Failed to jump to {next_wp_system}.")
+                    self.abort_reason = "low_fuel" if getattr(self.ap, '_low_fuel_abort', False) \
+                        else f"jump to {next_wp_system} failed"
                     _abort = True
                     break
 
@@ -765,6 +780,7 @@ class EDWayPoint:
                         res = self.ap.galaxy_map.set_gal_map_dest_bookmark(self.ap, gal_bookmark_type, gal_bookmark_num)
                         if not res:
                             self.ap_ckb('log+vce', f"Unable to set Galaxy Map bookmark.")
+                            self.abort_reason = "galaxy map bookmark failed"
                             _abort = True
                             break
 
@@ -773,6 +789,7 @@ class EDWayPoint:
                         res = self.ap.system_map.set_sys_map_dest_bookmark(self.ap, sys_bookmark_type, sys_bookmark_num)
                         if not res:
                             self.ap_ckb('log+vce', f"Unable to set System Map bookmark.")
+                            self.abort_reason = "system map bookmark failed"
                             _abort = True
                             break
 
@@ -792,12 +809,14 @@ class EDWayPoint:
                             res = self.ap.nav_panel.lock_destination(next_wp_station)
                             if not res:
                                 self.ap_ckb('log+vce', f"Unable to set Nav Panel OCR bookmark.")
+                                self.abort_reason = f"{next_wp_station} not found in the Nav Panel"
                                 _abort = True
                                 break
 
                     else:
                         # No bookmark and no station name -- nothing to target.
                         self.ap_ckb('log+vce', "No bookmark or station name defined for this waypoint.")
+                        self.abort_reason = "config: no station for this waypoint"
                         _abort = True
                         break
 
@@ -812,7 +831,8 @@ class EDWayPoint:
                         station_fail_cnt += 1
                         if station_fail_cnt >= max_station_fails:
                             self.ap_ckb('log+vce', f"Could not reach {next_wp_station} after {station_fail_cnt} "
-                                                   f"attempts. Stopping Waypoint Assist.")
+                                                   f"attempts.")
+                            self.abort_reason = f"could not reach {next_wp_station}"
                             _abort = True
                             break
                         delay = float(self.ap.config.get('WaypointRestartDelay', 10))
@@ -835,13 +855,16 @@ class EDWayPoint:
                 self._replot_after_trade = True  # cargo mass changed -> jump range changed
                 if getattr(self, '_trade_failed', False):
                     # Do not fly the whole route with an empty hold
-                    self.ap_ckb('log+vce', "Trade failed (purchase not confirmed). Stopping Waypoint Assist here, "
-                                           "still docked. Please check the market.")
+                    self.ap_ckb('log+vce', "Trade failed (purchase not confirmed)." +
+                                ("" if never_stop else " Stopping Waypoint Assist here, still docked. "
+                                                       "Please check the market."))
+                    self.abort_reason = "trade failed"
                     _abort = True
                     break
 
             # Mark this waypoint as completed
             self.mark_waypoint_complete(dest_key)
+            self.progress_cnt = getattr(self, 'progress_cnt', 0) + 1  # the fail-safe resets its stages on progress
             self.ap_ckb('log+vce', f"Current Waypoint complete.")
 
         # Done with waypoints
@@ -850,7 +873,10 @@ class EDWayPoint:
                            "Waypoint Route Complete, total distance jumped: " + str(self.ap.total_dist_jumped) + "LY")
             self.ap.update_ap_status("Idle")
         else:
-            self.ap_ckb('log+vce', "Waypoint Route was aborted.")
+            self.aborted = True
+            if not self.abort_reason:
+                self.abort_reason = "aborted"
+            self.ap_ckb('log+vce', f"Waypoint Route was aborted ({self.abort_reason}).")
             self.ap.update_ap_status("Idle")
 
     def _fuel_ok_for_route(self) -> bool:
