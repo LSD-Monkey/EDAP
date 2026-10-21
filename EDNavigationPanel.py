@@ -113,11 +113,40 @@ def destination_names_match(name_a: str | None, name_b: str | None, sim_match: f
         return False
     if a == b:
         return True
+    if callsign_matches(name_a, name_b) or callsign_matches(name_b, name_a):
+        return True
     # Partial names, e.g. 'JAQUES' for 'JAQUES STATION' (whole words only, min. 4 chars)
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
     if len(shorter) >= 4 and f" {shorter} " in f" {longer} ":
         return True
     return difflib.SequenceMatcher(None, a, b).ratio() >= sim_match
+
+
+_CALLSIGN_RE = re.compile(r'([A-Z0-9]{3})[\s\-_.]?([A-Z0-9]{3})')
+
+
+def _callsign_key(cs: str) -> str:
+    """ Call sign for comparison with OCR: O/0, I/1/L, S/5, B/8 look alike. """
+    return cs.upper().translate(str.maketrans({'O': '0', 'I': '1', 'L': '1', 'S': '5', 'B': '8', 'Z': '2'}))
+
+
+def carrier_callsign(name: str | None) -> str | None:
+    """ 'N6H-0XW' or 'Legacy of caliban N6H-0XW' -> 'N6H-0XW' (fleet carrier call sign), else None. """
+    m = re.search(r'\b([A-Z0-9]{3})-([A-Z0-9]{3})\b', (name or '').upper())
+    return f"{m.group(1)}-{m.group(2)}" if m else None
+
+
+def callsign_matches(dst_name: str | None, text: str | None) -> bool:
+    """ True if dst_name contains a carrier call sign that is also in text (e.g. an OCR'd Nav Panel row
+    'LEGACY OF CALIBAN N6H-0XW'). The trade data only knows the call sign, the Nav Panel shows the name too. """
+    cs = carrier_callsign(dst_name)
+    if not cs or not text:
+        return False
+    key = _callsign_key(cs.replace('-', ''))
+    for m in _CALLSIGN_RE.finditer(text.upper()):
+        if _callsign_key(m.group(1) + m.group(2)) == key:
+            return True
+    return False
 
 
 def rects_to_quadrilateral(rect_tlbr: Quad, rect_bltr: Quad) -> Quad:
@@ -641,6 +670,9 @@ class EDNavigationPanel:
                     self.ap.overlay.overlay_paint()
 
                 #print(f"Similarity of ['{dst_name.upper()}'] and {str(ocr_textlist)} is {sim}")
+                if sim <= sim_match and callsign_matches(dst_name, " ".join(str(t) for t in ocr_textlist)):
+                    logger.debug(f"Found fleet carrier '{dst_name}' in list by its call sign.")
+                    sim = 1.0
                 if sim > sim_match:
                     logger.debug(f"Found '{dst_name}' in list.")
                     return True

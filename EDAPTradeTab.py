@@ -16,7 +16,7 @@ from tkinter import ttk, messagebox
 from tktooltip import ToolTip
 
 from EDlogger import logger
-from EDTradeFinder import TradeFinder, route_to_waypoints, learn_timing
+from EDTradeFinder import TradeFinder, route_to_waypoints, learn_timing, load_carrier_names
 
 TIP = dict(delay=0.6, bg="#808080", fg="#FFFFFF")
 
@@ -271,6 +271,9 @@ class TradeTab:
         def worker():
             try:
                 # Times of your own recent flights (per jump, per station) for the profit per hour
+                if journal_dir:
+                    n = len(load_carrier_names(journal_dir))
+                    logger.debug(f"Trade search: {n} fleet carrier names known from the journals.")
                 timing = learn_timing(journal_dir) if journal_dir else None
                 if timing:
                     params['secs_per_jump'] = timing['secs_per_jump']

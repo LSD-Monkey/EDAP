@@ -14,6 +14,7 @@ Market data: Ardent Insight API (https://api.ardent-insight.com, EDDN data uploa
  4. Legs A->B and B->A are combined to round trips. Profit per trip and estimated profit per hour.
 """
 
+import re
 import json
 import math
 import time
@@ -194,6 +195,55 @@ def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, 
     return jumps, total
 
 
+CALLSIGN_RE = re.compile(r'\b([A-Z0-9]{3}-[A-Z0-9]{3})\b')
+# Fleet carrier names by call sign ('N6H-0XW' -> 'Legacy of caliban N6H-0XW'). The market data (EDDN/Ardent) only
+# has the call sign, the Nav Panel shows 'NAME CALL-SIGN'. Filled from the journals (FSSSignalDiscovered).
+CARRIER_NAMES: dict[str, str] = {}
+_carrier_files_read: dict[str, float] = {}
+
+
+def load_carrier_names(journal_dir: str, max_files: int = 400) -> dict[str, str]:
+    """ Reads the names of all fleet carriers seen in the journals (FSSSignalDiscovered, SignalType FleetCarrier,
+    'SignalName': 'Legacy of caliban N6H-0XW'). Files already read are skipped unless changed. """
+    import os
+    from os.path import join, getmtime
+    try:
+        files = sorted((join(journal_dir, f) for f in os.listdir(journal_dir)
+                        if f.startswith('Journal.') and f.endswith('.log')), key=getmtime)[-max_files:]
+    except Exception:
+        return CARRIER_NAMES
+    for fn in files:
+        try:
+            mt = getmtime(fn)
+            if _carrier_files_read.get(fn) == mt:
+                continue
+            with open(fn, encoding='utf-8', errors='ignore') as fh:
+                for line in fh:
+                    if '"FleetCarrier"' not in line or 'FSSSignalDiscovered' not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    name = (ev.get('SignalName') or '').strip()
+                    m = CALLSIGN_RE.search(name.upper())
+                    if m and len(name) > 8:
+                        CARRIER_NAMES[m.group(1)] = name
+            _carrier_files_read[fn] = mt
+        except Exception:
+            continue
+    return CARRIER_NAMES
+
+
+def carrier_display_name(station: str | None) -> str:
+    """ 'N6H-0XW' -> 'Legacy of caliban N6H-0XW' if the carrier was seen in the journals, else unchanged. """
+    st = (station or '').strip()
+    m = CALLSIGN_RE.fullmatch(st.upper())
+    if m and m.group(1) in CARRIER_NAMES:
+        return CARRIER_NAMES[m.group(1)]
+    return st
+
+
 def learn_timing(journal_dir: str, max_files: int = 12) -> dict | None:
     """ Times of your own recent flights from the journals (used for the profit per hour):
      - secs_per_jump: FSDJump -> next FSDJump of the same flight (align, charge, hyperspace, star avoidance),
@@ -327,7 +377,10 @@ class TradeFinder:
 
     @staticmethod
     def _station(row: dict) -> dict:
-        return {'system': row.get('systemName'), 'station': row.get('stationName'),
+        station = row.get('stationName')
+        if _norm(row.get('stationType') or '') in CARRIER_TYPES:
+            station = carrier_display_name(station)
+        return {'system': row.get('systemName'), 'station': station,
                 'station_type': row.get('stationType'), 'arrival_ls': float(row.get('distanceToArrival') or 0),
                 'pad': pad_size(row.get('maxLandingPadSize'), row.get('stationType') or ''),
                 'dist_ref': float(row.get('distance') or 0),

@@ -1,3 +1,10 @@
+# 10/21/2026 v1.9.4 b37
+- Trade tab: fleet carriers are shown with their name ('Legacy of caliban N6H-0XW' instead of 'N6H-0XW'). The
+  market data (EDDN/Ardent) only has the call sign; the names come from your journals (every carrier seen in a
+  system, FSSSignalDiscovered). Carriers never seen keep the call sign.
+- Nav Panel: a fleet carrier is also found by its call sign alone ('N6H-0XW' finds the row 'LEGACY OF CALIBAN
+  N6H-0XW', OCR mix-ups like 0/O tolerated). The same for the destination check of the Supercruise Assist.
+
 # 10/21/2026 v1.9.4 b36
 - FIX Waypoint Assist hung for 5.5 hours (log 2026-10-21 00:52): the ship dropped out of supercruise at the star
   LHS 1582 A on the way to Riazuddin Reach. EDAP pressed 'Supercruise' while the FSD was cooling down, the key was
