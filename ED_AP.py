@@ -93,6 +93,7 @@ class SCAssistResult(Enum):
     Reengage = 1  # In-game SC Assist needs to be activated again
     Failed = 2  # Dropped elsewhere, destination changed or timeout
     NoLineOfSight = 3  # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': target behind a planet/star
+    StarAhead = 4  # a star fills the view in flight direction: the SCA would fly into it (emergency drop)
 
 
 _SCA_DIST_RE = re.compile(r'(\d+(?:[.,]\d+)?)\s*(LS|LY|KM|MM|AU|M)(?![A-Z])')
@@ -442,7 +443,8 @@ class EDAutopilot:
             "SCAssistStallTime": 60,  # In-game SC Assist: secs without change of the distance to the target = stuck
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
             "TradeBuyAttempts": 2,
-            "SCEngageTimeout": 120,  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
+            "SCEngageTimeout": 120,
+            "SCStarAheadPercent": 12,  # %: star covering this much of the view ahead -> fly around it, 0 = off  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -559,6 +561,8 @@ class EDAutopilot:
                 cnf['SCAssistStallTime'] = 60
             if 'WaypointStationRetries' not in cnf:
                 cnf['WaypointStationRetries'] = 3
+            if 'SCStarAheadPercent' not in cnf:
+                cnf['SCStarAheadPercent'] = 12
             if 'SCEngageTimeout' not in cnf:
                 cnf['SCEngageTimeout'] = 120
             if 'TradeBuyAttempts' not in cnf:
@@ -1772,6 +1776,27 @@ class EDAutopilot:
             self.ap_ckb('log', 'Auto dock timer timed out.')
             logger.warning('Auto dock timer timed out. Aborting Docking.')
             raise Exception('Docking failed (Auto dock timer timed out)')
+
+    def star_ahead_percent(self, scr_reg) -> int | None:
+        """ Percent of the view ahead covered by a bright star, if above 'SCStarAheadPercent' (0 = off), else None.
+        A distant star is a small dot (< 1%), only a close one fills the region. """
+        thr = float(self.config.get('SCStarAheadPercent', 12) or 0)
+        if thr <= 0:
+            return None
+        try:
+            if not self.keys.elite_has_focus():
+                return None
+            # Own fixed threshold: sun_avoid() lowers the shared one to 25 for dull stars, then even the
+            # hyperspace tunnel and nebulae count as 'sun'. At 125 the red M star LHS 1582 A covered 56-69% of
+            # the region while flying into it, normal supercruise 0-1% (recording 2026-10-21 08:41).
+            img = scr_reg.screen.get_screen_region(scr_reg.reg['sun']['rect'], True)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY if img.shape[2] == 3 else cv2.COLOR_BGRA2GRAY)
+            pct = int((gray > 125).mean() * 100)
+        except Exception as e:
+            logger.debug(f"star_ahead_percent: {e}")
+            return None
+        logger.debug(f"Star ahead check: {pct}%")
+        return pct if pct >= thr else None
 
     def is_sun_dead_ahead(self, scr_reg):
         return scr_reg.sun_percent(scr_reg.screen) > 5
@@ -3297,6 +3322,10 @@ class EDAutopilot:
             elif result == SCAssistResult.Reengage:
                 self.ap_ckb('log', "Re-activating Supercruise Assist.")
                 continue
+            elif result == SCAssistResult.StarAhead:
+                self._sc_assist_escape_no_los("Star ahead")
+                self.ap_ckb('log', "Re-activating Supercruise Assist.")
+                continue
             elif result == SCAssistResult.NoLineOfSight:
                 # Target behind a planet/star: a plain re-activation does not help. Fly 'up' out of the shadow
                 # first, the re-activation then aligns to the target again.
@@ -3350,6 +3379,21 @@ class EDAutopilot:
                 # Not fatal, the in-game SCA turns the ship to the target by itself.
                 logger.warning(f"sc_assist: compass align failed: {e}")
 
+            # The destination behind the star: the SCA flies straight and drops us at the star ('EMERGENCY STOP -
+            # TOO CLOSE!', LHS 1582 A, 2026-10-21 00:52). Fly around it first.
+            for _ in range(2):
+                pct = self.star_ahead_percent(scr_reg)
+                if pct is None:
+                    break
+                self.ap_ckb('log', f"Star in the direction of the destination ({pct}% of the view).")
+                self._sc_assist_escape_no_los("Star ahead")
+                try:
+                    self.compass_align(scr_reg)
+                except EDAP_Interrupt:
+                    raise
+                except Exception as e:
+                    logger.warning(f"sc_assist: compass align failed: {e}")
+
         # 4. Throttle 50 %: the SCA then starts moving at once (with throttle 0 it sometimes never started, the
         #    distance stayed the same for 13 minutes, log 2026-10-20 08:52).
         self.set_throttle_50()
@@ -3381,6 +3425,8 @@ class EDAutopilot:
         last_dist = None
         last_progress = time.time()
         stall_cnt = 0
+        last_star_time = time.time()
+        star_cnt = 0
 
         while True:
             sleep(0.5)
@@ -3440,6 +3486,17 @@ class EDAutopilot:
                 m_near = re.match(r'([\d.]+)(KM|MM|M)$', last_dist)
                 if m_near and (m_near.group(2) in ('KM', 'M') or float(m_near.group(1)) < 50):
                     near = True
+
+            # A star ahead that grows: the SCA would fly into it
+            if in_sc and not near and (time.time() - last_star_time) >= 1.5:
+                last_star_time = time.time()
+                if self.star_ahead_percent(scr_reg) is not None:
+                    star_cnt += 1
+                    if star_cnt >= 2:
+                        self.ap_ckb('log+vce', "Star ahead, flying around it.")
+                        return SCAssistResult.StarAhead
+                else:
+                    star_cnt = 0
 
             # 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET': the SCA can not reach the target (behind a body)
             if check_los and in_sc and not near and (time.time() - last_los_time) >= ocr_interval:
@@ -3530,13 +3587,13 @@ class EDAutopilot:
                 self.ap_ckb('log', f"SC Assist timeout ({timeout} s).")
                 return SCAssistResult.Failed
 
-    def _sc_assist_escape_no_los(self):
+    def _sc_assist_escape_no_los(self, reason: str = "No line of sight to target"):
         """ Target is behind a planet/star ('MOVE TO OBTAIN LINE OF SIGHT TO TARGET'):
         throttle 0, pitch up 90 deg, fly 'SCAssistNoLOSEscapeTime' seconds (default 20) in this direction,
         throttle 0. The following SCA re-activation aligns to the target again. """
         escape_time = self.config.get('SCAssistNoLOSEscapeTime', 20)
-        self.update_ap_status("Escape: no line of sight")
-        self.ap_ckb('log+vce', f"No line of sight to target, pitching up and flying {escape_time} seconds.")
+        self.update_ap_status(f"Escape: {reason}")
+        self.ap_ckb('log+vce', f"{reason}, pitching up and flying {escape_time} seconds.")
         self.set_throttle_0()
         sleep(1)
         self.ship_control.pitch_up_down(90)

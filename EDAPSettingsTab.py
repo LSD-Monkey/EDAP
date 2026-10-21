@@ -81,6 +81,11 @@ SETTINGS: list[dict] = [
     dict(section="Supercruise Assist", key="SCAssistNoLOSEscapeTime", label="Line of sight escape (s)",
          type="int", min=5, max=120, tip="Target behind a planet ('MOVE TO OBTAIN LINE OF SIGHT'): pitch up 90° "
                                          "and fly this long, then re-activate the SCA."),
+    dict(section="Supercruise Assist", key="SCStarAheadPercent", label="Star ahead: avoid at (% of view)",
+         type="int", min=0, max=60, tip="If a star covers this much of the view ahead (centre of the screen) "
+                                        "during Supercruise Assist, EDAP pitches up and flies the 'Line of sight "
+                                        "escape' time, then re-activates the SCA. Prevents the emergency drop at "
+                                        "a star that lies between the ship and the station. 0 = off."),
     dict(section="Supercruise Assist", key="SCAssistMaxActivations", label="Max. (re-)activations", type="int",
          min=1, max=20, tip="How often the SCA is (re-)activated for one destination before giving up."),
     dict(section="Supercruise Assist", key="SCAssistTimeout", label="Timeout (s)", type="int", min=0, max=14400,

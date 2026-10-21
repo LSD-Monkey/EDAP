@@ -53,6 +53,7 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 | Fallback: EDAP steers itself | `SCAssistFallbackManual` | `False` | If the in-game SCA cannot be activated, EDAP steers to the target itself (old method, needs a good RPY tuning). |
 | No progress after (s) | `SCAssistStallTime` | `60` | If the distance to the target does not change for this long: 1st align + 50 % throttle, 2nd re-activate the SCA, 3rd give up. 0 = off. Range 0 - 600. |
 | Line of sight escape (s) | `SCAssistNoLOSEscapeTime` | `20` | Target behind a planet ('MOVE TO OBTAIN LINE OF SIGHT'): pitch up 90° and fly this long, then re-activate the SCA. Range 5 - 120. |
+| Star ahead: avoid at (% of view) | `SCStarAheadPercent` | `12` | If a star covers this much of the view ahead (centre of the screen) during Supercruise Assist, EDAP pitches up and flies the 'Line of sight escape' time, then re-activates the SCA. Prevents the emergency drop at a star that lies between the ship and the station. 0 = off. Range 0 - 60. |
 | Max. (re-)activations | `SCAssistMaxActivations` | `5` | How often the SCA is (re-)activated for one destination before giving up. Range 1 - 20. |
 | Timeout (s) | `SCAssistTimeout` | `3600` | Max. time to reach the destination. 0 = no limit. Range 0 - 14400. |
 
