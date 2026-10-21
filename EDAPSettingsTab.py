@@ -54,6 +54,10 @@ SETTINGS: list[dict] = [
                                          "a station."),
     dict(section="Waypoint Assist", key="WaypointStationRetries", label="Attempts to reach a station", type="int",
          min=1, max=20, tip="Waypoint Assist stops after this many failed attempts in a row to reach a station."),
+    dict(section="Waypoint Assist", key="SCEngageTimeout", label="Max. time mass locked (s)", type="int",
+         min=30, max=600, tip="Entering supercruise is given up after this time mass locked. A FSD cooldown is "
+                              "waited for, 'Supercruise' is pressed up to 4 times. Then the station is tried again "
+                              "(see 'Attempts to reach a station') and Waypoint Assist stops instead of waiting forever."),
     dict(section="Waypoint Assist", key="TradeBuyAttempts", label="Attempts to buy a commodity", type="int",
          min=1, max=5, tip="If a purchase is not confirmed (cargo unchanged), the market is left and entered again "
                            "and the purchase is tried again, up to this many attempts. Then Waypoint Assist "

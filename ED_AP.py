@@ -441,7 +441,8 @@ class EDAutopilot:
             "WaypointAutoRestarts": 3,  # Waypoint Assist restarts itself after an error, max. this often in a row
             "SCAssistStallTime": 60,  # In-game SC Assist: secs without change of the distance to the target = stuck
             "WaypointStationRetries": 3,  # Waypoint: max. failed attempts in a row to reach a station, then stop
-            "TradeBuyAttempts": 2,  # Waypoint: attempts to buy a commodity (market left and entered again between)
+            "TradeBuyAttempts": 2,
+            "SCEngageTimeout": 120,  # s: max. time mass locked before giving up entering supercruise  # Waypoint: attempts to buy a commodity (market left and entered again between)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -558,6 +559,8 @@ class EDAutopilot:
                 cnf['SCAssistStallTime'] = 60
             if 'WaypointStationRetries' not in cnf:
                 cnf['WaypointStationRetries'] = 3
+            if 'SCEngageTimeout' not in cnf:
+                cnf['SCEngageTimeout'] = 120
             if 'TradeBuyAttempts' not in cnf:
                 cnf['TradeBuyAttempts'] = 2
             if 'FuelRouteCheck' not in cnf:
@@ -2764,23 +2767,27 @@ class EDAutopilot:
             if self.status.get_flag(FlagsFsdMassLocked) and not self.status.get_flag(FlagsSupercruise):
                 self._pre_roll_to_target()
         last_boost = time.time()
+        t_lock = time.time()
+        mass_lock_timeout = float(self.config.get('SCEngageTimeout', 120))
         while self.status.get_flag(FlagsFsdMassLocked):
             if boost and time.time() - last_boost >= 1.3:
                 self.keys.send('UseBoostJuice')
                 last_boost = time.time()
+            if time.time() - t_lock > mass_lock_timeout:
+                self.ap_ckb('log+vce', f"Still mass locked after {mass_lock_timeout:.0f} s, can not enter supercruise.")
+                return False
             sleep(0.25)
 
-        # Engage Supercruise
-        self.keys.send('Supercruise')
+        # Engage Supercruise. Before, EDAP waited without a time limit for the FSD jump flag. After the drop at the
+        # star LHS 1582 A (2026-10-21 00:52) the FSD was cooling down, the 'Supercruise' key was ignored and EDAP
+        # waited 5.5 hours while pirates attacked the ship. Now: wait for the cooldown, press again if nothing
+        # happens (never while charging, that would cancel the jump) and give up after a few attempts.
+        ok = self._press_supercruise(boost)
 
         # Start SCO monitoring
         self.start_sco_monitoring()
-
-        # Wait for jump to supercruise, keep boosting.
-        while not self.status.get_flag(FlagsFsdJump):
-            if boost:
-                self.keys.send('UseBoostJuice')
-            sleep(1)
+        if not ok:
+            return False
 
         # Wait for supercruise
         self.status.wait_for_flag_on(FlagsSupercruise, timeout=30)
@@ -2789,6 +2796,52 @@ class EDAutopilot:
         self.set_throttle_50()
 
         return True
+
+    def _press_supercruise(self, boost: bool, attempts: int = 4) -> bool:
+        """ Presses 'Supercruise' until the FSD charges/jumps. Waits for a running FSD cooldown and the mass lock
+        first. Returns False if supercruise could not be engaged. """
+        for attempt in range(1, attempts + 1):
+            if self.status.get_flag(FlagsSupercruise):
+                return True
+            # FSD cooldown (e.g. after an emergency drop at a star or an interdiction)
+            t0 = time.time()
+            if self.status.get_flag(FlagsFsdCooldown):
+                self.ap_ckb('log', "FSD cooldown, waiting before entering supercruise.")
+            while self.status.get_flag(FlagsFsdCooldown) and time.time() - t0 < 90:
+                if boost:
+                    self.keys.send('UseBoostJuice')
+                sleep(1)
+            t0 = time.time()
+            while self.status.get_flag(FlagsFsdMassLocked) and time.time() - t0 < 60:
+                sleep(0.5)
+            if not (self.status.get_flag(FlagsFsdCharging) or self.status.get_flag(FlagsFsdJump)):
+                self.keys.send('Supercruise')
+            # Wait for the FSD to charge and jump
+            t0 = time.time()
+            while time.time() - t0 < 25:
+                if self.status.get_flag(FlagsFsdJump) or self.status.get_flag(FlagsSupercruise):
+                    return True
+                if boost and not self.status.get_flag(FlagsFsdCharging):
+                    self.keys.send('UseBoostJuice')
+                sleep(1)
+            if self.status.get_flag(FlagsFsdCharging):
+                # still charging: give it a bit more time, do not press again (would cancel the charge)
+                t0 = time.time()
+                while self.status.get_flag(FlagsFsdCharging) and time.time() - t0 < 20:
+                    if self.status.get_flag(FlagsFsdJump) or self.status.get_flag(FlagsSupercruise):
+                        return True
+                    sleep(0.5)
+                if self.status.get_flag(FlagsFsdJump) or self.status.get_flag(FlagsSupercruise):
+                    return True
+            flags = []
+            for f, n in ((FlagsFsdCooldown, 'cooldown'), (FlagsFsdMassLocked, 'mass locked'),
+                         (FlagsOverHeating, 'overheating'), (FlagsFsdCharging, 'charging')):
+                if self.status.get_flag(f):
+                    flags.append(n)
+            self.ap_ckb('log', f"Supercruise not engaged (attempt {attempt} of {attempts}"
+                               f"{', FSD ' + ', '.join(flags) if flags else ''}), trying again.")
+        self.ap_ckb('log+vce', "Could not enter supercruise.")
+        return False
 
     def waypoint_assist(self, keys, scr_reg):
         """ Processes the waypoints, performing jumps and sc assist if going to a station
@@ -3003,7 +3056,8 @@ class EDAutopilot:
             self.waypoint_undock_seq()
 
         # Ensure we are in supercruise
-        self.sc_engage(False)
+        if not self.sc_engage(False):
+            return False
         self.jn.ship_state()['interdicted'] = False
 
         # Ensure we are 50%, don't want the loop of shame
@@ -3124,7 +3178,9 @@ class EDAutopilot:
             self.waypoint_undock_seq()
 
         # Ensure we are in supercruise
-        self.sc_engage(False)
+        if not self.sc_engage(False):
+            self.ap_ckb('log', "Supercruise Assist: could not enter supercruise.")
+            return False
         self.jn.ship_state()['interdicted'] = False
 
         max_activations = max(1, int(self.config.get('SCAssistMaxActivations', 5)))

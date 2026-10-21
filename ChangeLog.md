@@ -1,3 +1,12 @@
+# 10/21/2026 v1.9.4 b36
+- FIX Waypoint Assist hung for 5.5 hours (log 2026-10-21 00:52): the ship dropped out of supercruise at the star
+  LHS 1582 A on the way to Riazuddin Reach. EDAP pressed 'Supercruise' while the FSD was cooling down, the key was
+  ignored and EDAP waited without a time limit for the jump (pirates attacked the ship meanwhile, hull 60%).
+  Entering supercruise now waits for the FSD cooldown, presses 'Supercruise' again if the FSD does not charge
+  (never while charging, that would cancel it), up to 4 times, and gives up after that or after 'SCEngageTimeout'
+  (new setting, 120 s) mass locked. The station is then tried again, after 'Attempts to reach a station' Waypoint
+  Assist stops.
+
 # 10/20/2026 v1.9.4 b35
 - FIX market: wrong commodity selected, Waypoint Assist stopped at Stiegler Dock (log 2026-10-20 20:14). The BUY list
   of the game also showed PERFORMANCE ENHANCERS (stock 0, not buyable, so not counted by EDAP). Every item after it
