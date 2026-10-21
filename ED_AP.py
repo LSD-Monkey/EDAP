@@ -2757,6 +2757,12 @@ class EDAutopilot:
             self.start_sco_monitoring()
             return True
 
+        if self._emergency_drop_at_star():
+            # Do not throttle up towards the star, escape via the escape vector
+            ok = self._escape_star() or self._press_supercruise(False)
+            self.start_sco_monitoring()
+            return ok
+
         self.random_pause(1.5)
         self.set_throttle_100()
 
@@ -2797,13 +2803,92 @@ class EDAutopilot:
 
         return True
 
+    def _emergency_drop_at_star(self) -> bool:
+        """ True if the last drop out of supercruise was at a star ('EMERGENCY STOP - TOO CLOSE!'). """
+        try:
+            return (self.jn.ship_state().get('sc_exit_body_type') == 'Star' and
+                    not self.status.get_flag(FlagsSupercruise) and not self.status.get_flag(FlagsDocked))
+        except Exception:
+            return False
+
+    def _escape_star(self) -> bool:
+        """ Back to supercruise after an emergency drop at a star (recording 2026-10-21 08:41):
+        1. 'EMERGENCY STOP - TOO CLOSE!', FSD cooldown ~45 s. Turn away from the star in the meantime, the escape
+           vector points away from it and the heat is lower.
+        2. Press 'Supercruise': the FSD charges, the HUD shows 'ALIGN WITH ESCAPE VECTOR' and the escape vector is
+           shown on the compass like a nav point.
+        3. Align with the compass as fast as possible (heat rose from 90% to 159% in 14 s), then
+           'THROTTLE UP TO ENGAGE': throttle 100% -> supercruise.
+        Returns True when in supercruise (or the jump started). """
+        self.ap_ckb('log+vce', "Emergency drop at the star. Escaping via the escape vector.")
+        scr_reg = self.scrReg
+        # 1. Cooldown: turn away from the star
+        try:
+            self.set_throttle_0()
+            if self.is_sun_dead_ahead(scr_reg):
+                self.sun_avoid(scr_reg, False)
+        except EDAP_Interrupt:
+            raise
+        except Exception as e:
+            logger.warning(f"escape star, sun avoid: {e}")
+        t0 = time.time()
+        while self.status.get_flag(FlagsFsdCooldown) and time.time() - t0 < 90:
+            sleep(0.5)
+        while self.status.get_flag(FlagsFsdMassLocked) and time.time() - t0 < 120:
+            sleep(0.5)
+        # 2. Charge
+        if not (self.status.get_flag(FlagsFsdCharging) or self.status.get_flag(FlagsFsdJump)):
+            self.keys.send('Supercruise')
+        if not self.status.wait_for_flag_on(FlagsFsdCharging, 4) and not self._in_sc_or_jumping():
+            self.ap_ckb('log', "Escape: FSD does not charge.")
+            return False
+        # 3. Align with the escape vector (compass), throttle up
+        t0 = time.time()
+        self.set_throttle_50()  # best turn rate
+        while time.time() - t0 < 45:
+            if self._in_sc_or_jumping():
+                break
+            try:
+                aligned = self.compass_align(scr_reg)
+            except EDAP_Interrupt:
+                raise
+            except Exception as e:
+                logger.warning(f"escape star, compass align: {e}")
+                aligned = False
+            if self._in_sc_or_jumping():
+                break
+            if aligned:
+                self.set_throttle_100()  # 'THROTTLE UP TO ENGAGE'
+                for _ in range(10):
+                    if self._in_sc_or_jumping():
+                        break
+                    sleep(0.5)
+            if not self.status.get_flag(FlagsFsdCharging) and not self._in_sc_or_jumping():
+                # charge lost (e.g. aligned too slow): charge again
+                self.keys.send('Supercruise')
+                self.status.wait_for_flag_on(FlagsFsdCharging, 4)
+        if not self._in_sc_or_jumping():
+            self.ap_ckb('log', "Escape: could not align with the escape vector in time.")
+            return False
+        self.status.wait_for_flag_on(FlagsSupercruise, timeout=15)
+        self.jn.ship_state()['sc_exit_body_type'] = ''
+        self.ap_ckb('log', "Escaped from the star, back in supercruise.")
+        return True
+
+    def _in_sc_or_jumping(self) -> bool:
+        return bool(self.status.get_flag(FlagsSupercruise) or self.status.get_flag(FlagsFsdJump))
+
     def _press_supercruise(self, boost: bool, attempts: int = 4) -> bool:
         """ Presses 'Supercruise' until the FSD charges/jumps. Waits for a running FSD cooldown and the mass lock
         first. Returns False if supercruise could not be engaged. """
         for attempt in range(1, attempts + 1):
             if self.status.get_flag(FlagsSupercruise):
                 return True
-            # FSD cooldown (e.g. after an emergency drop at a star or an interdiction)
+            if self._emergency_drop_at_star():
+                if self._escape_star():
+                    return True
+                continue
+            # FSD cooldown (e.g. after an interdiction)
             t0 = time.time()
             if self.status.get_flag(FlagsFsdCooldown):
                 self.ap_ckb('log', "FSD cooldown, waiting before entering supercruise.")

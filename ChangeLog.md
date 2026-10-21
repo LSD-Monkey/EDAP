@@ -6,6 +6,11 @@
   (never while charging, that would cancel it), up to 4 times, and gives up after that or after 'SCEngageTimeout'
   (new setting, 120 s) mass locked. The station is then tried again, after 'Attempts to reach a station' Waypoint
   Assist stops.
+- NEW escape after an emergency drop at a star ('EMERGENCY STOP - TOO CLOSE!', recording 2026-10-21 08:41):
+  EDAP no longer throttles up towards the star. During the FSD cooldown (~45 s) it turns away from the star, then
+  presses 'Supercruise', aligns with the 'ESCAPE VECTOR' shown on the compass while the FSD charges (heat rises
+  fast: 90% -> 159% in 14 s), and throttles up to 100% once aligned ('THROTTLE UP TO ENGAGE'). If the charge is
+  lost, it charges again; after 45 s without success it counts as a failed attempt.
 
 # 10/20/2026 v1.9.4 b35
 - FIX market: wrong commodity selected, Waypoint Assist stopped at Stiegler Dock (log 2026-10-20 20:14). The BUY list
