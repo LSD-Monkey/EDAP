@@ -452,7 +452,9 @@ class EDAutopilot:
             "WaypointRecoveryNewRoute": True,  # fail-safe: start another trade route if still failing after the wait
             "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel
             "TradePreSellMinTons": 100,  # trade route start: sell other cargo above this first (0 = off)
-            "TradeCarrierMaxAgeHours": 6,  # Trade tab: max. age of carrier prices (carriers move, change orders)
+            "TradeCarrierMaxAgeHours": 6,
+            "AutoReconnect": True,  # fail-safe: after a connection error press OK, CONTINUE, game mode, load again
+            "ReconnectMode": "Solo",  # fail-safe: game mode for the reconnect ('Solo' or 'Open')  # Trade tab: max. age of carrier prices (carriers move, change orders)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
             "GameConnectionCheck": True,  # Stop all assists on connection error / main menu / game closed
             "SCAssistMaxActivations": 5,  # In-game SC Assist: max. (re-)activations per destination
@@ -571,7 +573,8 @@ class EDAutopilot:
                 cnf['WaypointStationRetries'] = 3
             for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
                          ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
-                         ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6)):
+                         ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6),
+                         ('AutoReconnect', True), ('ReconnectMode', 'Solo')):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12

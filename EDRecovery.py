@@ -88,6 +88,11 @@ class WaypointRecovery:
         self._check_progress()
         self.ap.update_ap_status("Fail-safe")
 
+        # A failure is often a 'CONNECTION ERROR' dialog on screen (the journal/status do not always show it)
+        if not self.ap.game_is_playable() or self._connection_error_on_screen():
+            self.wait_for_game()
+            return
+
         if reason == 'low_fuel':
             if not self.refuel_stop():
                 # No station found / not reachable: treat like any other failure
@@ -136,25 +141,188 @@ class WaypointRecovery:
 
     # ------------------------------------------------------------------------------------------------------------
     def wait_for_game(self):
-        """ The game is not playable (main menu, connection lost, closed): wait until it is again. """
-        self.log("Fail-safe: game not in flight (main menu, connection lost or closed). Waiting until it is "
-                 "playable again (STOP to cancel).", True)
+        """ The game is not playable (main menu, connection lost, closed): reconnect ('AutoReconnect', the sequence
+        of the recording 2026-10-22 11:49) or wait until it is playable again. """
+        self.log("Fail-safe: game not in flight (connection error, main menu or closed). "
+                 + ("Reconnecting." if self._cfg('AutoReconnect', True) else
+                    "Waiting until it is playable again (STOP to cancel)."), True)
         t0 = time.time()
         last_log = t0
+        attempt = 0
+        next_try = 0.0
         while True:
             self.ap.update_ap_status(f"Waiting for the game ({int((time.time() - t0) / 60)} min)")
-            sleep(15)
             try:
-                if self.ap.game_is_playable():
+                if self.ap.game_is_playable() and not self._connection_error_on_screen(quick=True):
                     break
             except Exception as e:
                 if _is_interrupt(e):
                     raise
+            if self._cfg('AutoReconnect', True) and time.time() >= next_try:
+                attempt += 1
+                try:
+                    if self.reconnect(attempt):
+                        break
+                except Exception as e:
+                    if _is_interrupt(e):
+                        raise
+                    logger.exception("reconnect")
+                    self.log(f"Reconnect failed: {e}")
+                # Servers down for longer: try again after 1, 2, 4 ... max. 10 minutes
+                next_try = time.time() + min(600, 60 * 2 ** min(attempt - 1, 4))
             if time.time() - last_log > 600:
                 last_log = time.time()
                 self.log(f"Fail-safe: still waiting for the game ({int((time.time() - t0) / 60)} min).")
+            sleep(10)
         self.log("Game is playable again, continuing Waypoint Assist in 15 s.", True)
         sleep(15)
+
+    # --- Reconnect --------------------------------------------------------------------------------------------
+    # Recording 2026-10-22 11:49:
+    #   1. 'CONNECTION ERROR - Could not connect to transaction server. Press OK to return to the main menu.' with OK
+    #      selected -> UI_Select. 'LOADING GAME' ~35 s, then the main menu (journal: Music 'MainMenu').
+    #   2. Main menu: CONTINUE is the top item -> UI_Up a few times, UI_Select.
+    #   3. Game mode screen: OPEN PLAY | PRIVATE GROUP | SOLO PLAY | ARENA | TRAINING, OPEN PLAY highlighted.
+    #      UI_Right 2x = SOLO PLAY. While the cards show 'CAN'T CONNECT TO FRONTIER SERVERS' a select does
+    #      nothing; once the servers are back the cards turn orange and UI_Select loads the game (journal:
+    #      'Commander', 'LoadGame' ~30 s later).
+    MODE_INDEX = {'open': 0, 'open play': 0, 'solo': 2, 'solo play': 2}
+
+    def _ocr_screen(self, rect=(0.15, 0.15, 0.85, 0.85)) -> str:
+        """ Upper case text of a screen region without spaces ('' if not readable). """
+        try:
+            img = self.ap.scr.get_screen_rect_pct(list(rect))
+            txt = self.ap.ocr.image_simple_ocr(img, 'reconnect') if img is not None else None
+        except Exception as e:
+            if _is_interrupt(e):
+                raise
+            logger.debug(f"reconnect OCR: {e}")
+            return ''
+        joined = re.sub(r'[^A-Z]', '', " ".join(str(t) for t in (txt or [])).upper())
+        logger.debug(f"Reconnect OCR: {joined[:200]}")
+        return joined
+
+    def _connection_error_on_screen(self, quick: bool = False) -> bool:
+        if not self._cfg('GameConnectionCheck', True):
+            return False
+        if quick and self.ap.game_is_playable():
+            # only look when something else hints at a problem (OCR is slow)
+            return False
+        t = self._ocr_screen((0.25, 0.25, 0.75, 0.75))
+        return any(m in t for m in ('CONNECTIONERROR', 'RETURNTOTHEMAINMENU', 'COULDNOTCONNECT',
+                                    'VERBINDUNGSFEHLER'))
+
+    def _journal_events_since(self, since_utc: float, names: tuple[str, ...]) -> bool:
+        """ True if one of the journal events was written after since_utc (epoch). """
+        try:
+            from datetime import datetime
+            path = self.ap.jn.get_latest_log() or self.ap.jn.current_log
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 16384))
+                lines = f.read().decode('utf-8', errors='ignore').splitlines()
+            for line in reversed(lines):
+                if not any(f'"{n}"' in line for n in names):
+                    continue
+                try:
+                    ev = json.loads(line)
+                    ts = datetime.fromisoformat(ev['timestamp'].replace('Z', '+00:00')).timestamp()
+                except Exception:
+                    continue
+                if ev.get('event') in names and ts >= since_utc - 2:
+                    return True
+        except Exception as e:
+            logger.debug(f"journal events: {e}")
+        return False
+
+    def _wait_main_menu(self, timeout: float) -> bool:
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.ap._journal_tail_game_state() == 'main_menu':
+                return True
+            sleep(2)
+        return False
+
+    def reconnect(self, attempt: int = 1) -> bool:
+        """ Connection error dialog -> main menu -> CONTINUE -> game mode -> load the game. Returns True when the
+        ship is back (Status.json flags). """
+        ap, keys = self.ap, self.ap.keys
+        try:
+            from Screen import set_focus_elite_window
+            set_focus_elite_window()
+        except Exception:
+            pass
+        state = ap._journal_tail_game_state()
+        if state == 'shutdown':
+            self.log("Reconnect: the game was closed, it can not be started by EDAP. Waiting.")
+            return False
+        self.log(f"Reconnect attempt {attempt}.")
+        ap.update_ap_status(f"Reconnecting ({attempt})")
+
+        # 1. Connection error dialog: OK
+        if state != 'main_menu':
+            if self._connection_error_on_screen():
+                self.log("Reconnect: 'CONNECTION ERROR' shown, pressing OK.", True)
+                keys.send('UI_Select')
+            elif not ap.game_is_playable():
+                # No dialog read, but not in the game (e.g. dialog in another language): OK is selected anyway
+                keys.send('UI_Select')
+            else:
+                return True
+            if not self._wait_main_menu(180):
+                self.log("Reconnect: main menu not reached.")
+                return ap.game_is_playable()
+            sleep(5)  # menu fades in
+
+        # 2. Main menu: CONTINUE (top item)
+        keys.send('UI_Up', repeat=6)
+        sleep(0.8)
+        keys.send('UI_Select')
+        sleep(4)
+        txt = self._ocr_screen((0.0, 0.2, 1.0, 0.9))
+        if not any(m in txt for m in ('SOLOPLAY', 'OPENPLAY', 'PRIVATEGROUP', 'ARENA')):
+            # Not the game mode screen (another menu item was selected?): back and try again next time
+            self.log("Reconnect: game mode screen not found, back to the main menu.")
+            keys.send('UI_Back')
+            sleep(2)
+            return False
+
+        # 3. Game mode: Solo (default) or Open
+        idx = self.MODE_INDEX.get(str(ap.config.get('ReconnectMode', 'Solo')).lower(), 2)
+        keys.send('UI_Left', repeat=5)
+        sleep(0.5)
+        if idx:
+            keys.send('UI_Right', repeat=idx)
+        sleep(1)
+
+        # 4. Select until the game loads (servers may need a while to come back)
+        t0 = time.time()
+        logged_servers = False
+        while time.time() - t0 < 300:
+            if self._journal_events_since(t0, ('Commander', 'LoadGame')):
+                break
+            keys.send('UI_Select')
+            sleep(8)
+            if self._journal_events_since(t0, ('Commander', 'LoadGame')):
+                break
+            if not logged_servers and 'CANTCONNECT' in self._ocr_screen((0.0, 0.2, 1.0, 0.9)):
+                logged_servers = True
+                self.log("Reconnect: 'CAN'T CONNECT TO FRONTIER SERVERS', waiting for the servers.", True)
+        else:
+            self.log("Reconnect: the game did not load within 5 minutes, back to the main menu.")
+            keys.send('UI_Back')
+            return False
+
+        self.log("Reconnect: game is loading.", True)
+        t1 = time.time()
+        while time.time() - t1 < 180:
+            sleep(3)
+            if ap.game_is_playable():
+                sleep(5)
+                self.log("Reconnect: back in the ship.", True)
+                return True
+        self.log("Reconnect: game loaded, but the ship state is not back yet.")
+        return ap.game_is_playable()
 
     def wait_minutes(self, minutes: float):
         """ Waits with throttle 0; reacts on interdictions. """

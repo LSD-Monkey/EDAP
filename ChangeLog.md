@@ -1,3 +1,15 @@
+# 10/22/2026 v1.9.4 b40 - reconnect after a connection error
+- NEW reconnect (fail-safe of Waypoint Assist, setting 'AutoReconnect', on by default), the sequence of the
+  recording 2026-10-22 11:49:
+  1. 'CONNECTION ERROR ... Press OK to return to the main menu': UI_Select (OK is selected), wait for the main menu
+     (journal: Music 'MainMenu', ~35 s 'LOADING GAME').
+  2. Main menu: UI_Up to CONTINUE, UI_Select. The game mode screen is checked by OCR (else UI_Back, next try).
+  3. Game mode 'ReconnectMode' (Solo, or Open): UI_Left to OPEN PLAY, UI_Right 2x to SOLO PLAY.
+  4. UI_Select every 8 s while the cards show 'CAN'T CONNECT TO FRONTIER SERVERS', until the journal shows
+     'Commander'/'LoadGame' (max. 5 min), then wait for the ship (Status.json).
+  Failed attempts are repeated after 1, 2, 4, 8, 10, 10 ... minutes. A closed game can not be started by EDAP.
+- Fail-safe: before jumping out and back after a failure, the screen is checked for a connection error dialog.
+
 # 10/21/2026 v1.9.4 b39 - trade search: carriers
 - Trade tab: the age of BOTH prices is checked for every station (buy price at the seller and sell price at the
   buyer). A market row without a date is no longer treated as fresh (warning with the field names in the log).

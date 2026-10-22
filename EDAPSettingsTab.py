@@ -58,6 +58,12 @@ SETTINGS: list[dict] = [
          tip="Waypoint Assist does not stop on errors: 1) jump to a neighbour system and back, 2) leave the system "
              "and wait, 3) start another trade route. Low fuel: fuel stop at the nearest station. Main menu / "
              "connection lost: wait until the game is playable again. Only STOP stops it."),
+    dict(section="Waypoint Assist", key="AutoReconnect", label="Fail-safe: reconnect after connection error",
+         type="bool", tip="CONNECTION ERROR / main menu: press OK, CONTINUE in the main menu, choose the game mode and "
+                          "load the game again (repeated with growing pauses while the servers are down). Off: only "
+                          "wait until the game is playable again."),
+    dict(section="Waypoint Assist", key="ReconnectMode", label="Fail-safe: game mode for reconnect", type="choice",
+         choices=["Solo", "Open"], tip="Game mode chosen when reconnecting."),
     dict(section="Waypoint Assist", key="WaypointRecoveryJumps", label="Fail-safe: jumps out and back", type="int",
          min=1, max=10, tip="How often the fail-safe jumps to a neighbour system and back before the long wait."),
     dict(section="Waypoint Assist", key="WaypointRecoveryWait", label="Fail-safe: wait (min)", type="int",

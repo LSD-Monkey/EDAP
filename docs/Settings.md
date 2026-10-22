@@ -41,6 +41,8 @@ The hotkey must be in the format 'ctrl+shift+a, s'. This would trigger when the 
 | Wait before restart / retry (s) | `WaypointRestartDelay` | `10` | Seconds to wait before an auto-restart or a new attempt to reach a station. Range 0 - 300. |
 | Attempts to reach a station | `WaypointStationRetries` | `3` | Waypoint Assist stops after this many failed attempts in a row to reach a station. Range 1 - 20. |
 | Fail-safe: never stop | `WaypointNeverStop` | `True` | Waypoint Assist does not stop on errors: 1) jump to a neighbour system and back, 2) leave the system and wait, 3) start another trade route. Low fuel: fuel stop at the nearest station. Main menu / connection lost: wait until the game is playable again. Only STOP stops it. |
+| Fail-safe: reconnect after connection error | `AutoReconnect` | `True` | CONNECTION ERROR / main menu: press OK, CONTINUE in the main menu, choose the game mode and load the game again (repeated with growing pauses while the servers are down). Off: only wait until the game is playable again. |
+| Fail-safe: game mode for reconnect | `ReconnectMode` | `Solo` | Game mode chosen when reconnecting (Solo or Open). |
 | Fail-safe: jumps out and back | `WaypointRecoveryJumps` | `3` | How often the fail-safe jumps to a neighbour system and back before the long wait. Range 1 - 10. |
 | Fail-safe: wait (min) | `WaypointRecoveryWait` | `30` | Minutes to wait outside the system when jumping out and back did not help. Range 1 - 240. |
 | Fail-safe: start another trade route | `WaypointRecoveryNewRoute` | `True` | Still failing after the wait: search trade routes around the ship with the Trade tab filters and start the best one without the stations of the failed route. |
