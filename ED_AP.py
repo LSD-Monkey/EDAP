@@ -457,6 +457,8 @@ class EDAutopilot:
             "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel
             "TradePreSellMinTons": 100,  # trade route start: sell other cargo above this first (0 = off)
             "TradeCarrierMaxAgeHours": 6,
+            "PlanetMinAltitude": 3000,  # m: below this and sinking -> throttle 0 and pitch up away from the planet
+            "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
             "TradeAdaptCommodity": True,  # trade: refill the hold with the best commodities if the planned one is short
             "TradeMinProfitPerTon": 1000,  # trade: commodities with less profit per ton are not bought when adapting
             "AutoReconnect": True,  # fail-safe: after a connection error press OK, CONTINUE, game mode, load again
@@ -581,7 +583,8 @@ class EDAutopilot:
                          ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
                          ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6),
                          ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('TradeAdaptCommodity', True),
-                         ('TradeMinProfitPerTon', 1000)):
+                         ('TradeMinProfitPerTon', 1000), ('PlanetMinAltitude', 3000),
+                         ('JumpBlockedEscapeTime', 20)):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
@@ -2449,6 +2452,8 @@ class EDAutopilot:
                 res = self.status.wait_for_flag_on(FlagsFsdCharging, 5)
                 if not res:
                     logger.error('FSD failed to charge.')
+                    if i >= 1:
+                        self._escape_jump_blocked(scr_reg)
                     continue
 
             res = self.status.wait_for_flag_on(FlagsFsdJump, 30)
@@ -2823,14 +2828,23 @@ class EDAutopilot:
         last_boost = time.time()
         t_lock = time.time()
         mass_lock_timeout = float(self.config.get('SCEngageTimeout', 120))
+        guard = {}
         while self.status.get_flag(FlagsFsdMassLocked):
             if boost and time.time() - last_boost >= 1.3:
                 self.keys.send('UseBoostJuice')
                 last_boost = time.time()
+            # Near a planet: never fly towards the surface (Type-9 crashed into George Pantazis A 6 after 120 s at
+            # 100% throttle while 'mass locked', log 2026-10-22 17:08-17:19)
+            self._planet_guard(guard)
             if time.time() - t_lock > mass_lock_timeout:
+                if guard.get('pitching'):
+                    self.keys.send('PitchUpButton', state=0)
+                self.set_throttle_0()
                 self.ap_ckb('log+vce', f"Still mass locked after {mass_lock_timeout:.0f} s, can not enter supercruise.")
                 return False
             sleep(0.25)
+        if guard.get('pitching'):
+            self.keys.send('PitchUpButton', state=0)
 
         # Engage Supercruise. Before, EDAP waited without a time limit for the FSD jump flag. After the drop at the
         # star LHS 1582 A (2026-10-21 00:52) the FSD was cooling down, the 'Supercruise' key was ignored and EDAP
@@ -2926,6 +2940,84 @@ class EDAutopilot:
     def _in_sc_or_jumping(self) -> bool:
         return bool(self.status.get_flag(FlagsSupercruise) or self.status.get_flag(FlagsFsdJump))
 
+    def _escape_jump_blocked(self, scr_reg):
+        """ The FSD does not charge for the hyperspace jump although we are aligned: the target is obscured by a
+        planet, or we are too close to it (after undocking from Zamka Platform the route went through the planet
+        George Pantazis A 6: 5x 'FSD failed to charge', then EDAP flew into the planet, 2026-10-22). Turn away from
+        the body, fly 'JumpBlockedEscapeTime' (default 20 s), align to the target again. """
+        flags = []
+        for f, n in ((FlagsFsdMassLocked, 'mass locked'), (FlagsFsdCooldown, 'cooldown'),
+                     (FlagsOverHeating, 'overheating')):
+            if self.status.get_flag(f):
+                flags.append(n)
+        if 'cooldown' in flags:
+            self.status.wait_for_flag_off(FlagsFsdCooldown, timeout=60)
+            return
+        escape = float(self.config.get('JumpBlockedEscapeTime', 20))
+        alt = self._altitude()
+        self.ap_ckb('log+vce', "FSD does not charge (" + (", ".join(flags) if flags else "target obscured?") +
+                    (f", {alt / 1000:.0f} km above a planet" if alt is not None else "") +
+                    f"). Turning away and flying {escape:.0f} s.")
+        self.update_ap_status("Escape: jump blocked")
+        self.set_throttle_0()
+        sleep(1)
+        self.ship_control.pitch_up_down(90)
+        self.set_throttle_100()
+        guard = {}
+        t0 = time.time()
+        while time.time() - t0 < escape:
+            self._planet_guard(guard)
+            sleep(0.5)
+        if guard.get('pitching'):
+            self.keys.send('PitchUpButton', state=0)
+        self.set_throttle_50()
+        try:
+            self.mnvr_to_target(scr_reg)
+        except EDAP_Interrupt:
+            raise
+        except Exception as e:
+            logger.warning(f"escape jump blocked: realign failed: {e}")
+
+    def _altitude(self) -> float | None:
+        """ Altitude above a planet surface in metres (Status.json, only near a planet), else None. """
+        try:
+            if not self.status.get_flag(FlagsHasLatLong):
+                return None
+            alt = self.status.get_cleaned_data().get('Altitude')
+            return float(alt) if alt is not None else None
+        except Exception:
+            return None
+
+    def _planet_guard(self, g: dict):
+        """ Called repeatedly while flying in normal space. If the altitude above a planet goes down, pitch up until it
+        goes up again; close to the surface (< 'PlanetMinAltitude', default 3000 m) stop first (throttle 0). """
+        alt = self._altitude()
+        now = time.time()
+        if alt is None:
+            if g.get('pitching'):
+                self.keys.send('PitchUpButton', state=0)
+                g['pitching'] = False
+            g.clear()
+            return
+        last_alt, last_t = g.get('alt'), g.get('t', now)
+        if last_alt is None or now - last_t >= 1.0:
+            sinking = last_alt is not None and alt < last_alt - 5
+            min_alt = float(self.config.get('PlanetMinAltitude', 3000))
+            if sinking and not g.get('pitching'):
+                self.ap_ckb('log', f"Altitude {alt:.0f} m and going down, pitching up away from the planet.")
+                if alt < min_alt:
+                    self.set_throttle_0()
+                    g['stopped'] = True
+                self.keys.send('PitchUpButton', state=1)
+                g['pitching'] = True
+            elif not sinking and g.get('pitching') and last_alt is not None and alt > last_alt + 5:
+                self.keys.send('PitchUpButton', state=0)
+                g['pitching'] = False
+                if g.pop('stopped', False):
+                    self.set_throttle_100()
+                self.ap_ckb('log', f"Altitude {alt:.0f} m and rising, flying on.")
+            g['alt'], g['t'] = alt, now
+
     def _press_supercruise(self, boost: bool, attempts: int = 4) -> bool:
         """ Presses 'Supercruise' until the FSD charges/jumps. Waits for a running FSD cooldown and the mass lock
         first. Returns False if supercruise could not be engaged. """
@@ -3008,8 +3100,11 @@ class EDAutopilot:
         elif self.status.get_flag(FlagsDocked) or self.status.get_flag(FlagsLanded):
             self.waypoint_undock_seq()
 
-        # Ensure we are in supercruise
-        self.sc_engage(False)
+        # Ensure we are in supercruise (before, a failure here was ignored and EDAP aligned and tried to jump in
+        # normal space next to a planet: 'FSD failed to charge' 5x, log 2026-10-22 17:04)
+        if not self.sc_engage(False):
+            self.ap_ckb('log', "Could not enter supercruise, jump cancelled.")
+            return False
 
         # Route sent...  FSD Assist to that destination
         fin = self.fsd_assist(scr_reg)

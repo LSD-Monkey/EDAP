@@ -1,3 +1,20 @@
+# 10/22/2026 v1.9.4 b43 - ship destroyed: respawn; planet safety
+Log/journal 2026-10-22 17:02-17:19: after undocking from Zamka Platform the route to Teegarden's star went through
+the planet George Pantazis A 6. 'FSD failed to charge' 5x, the ship dropped out of supercruise at the planet,
+EDAP then flew 120 s at 100% throttle 'to leave the mass lock' (towards the planet), ignored the failed supercruise
+and aligned/jumped in normal space, hull 52% -> 18%, 'Died' at 17:19:51. The fail-safe took the rebuy screen for
+the main menu and tried the reconnect sequence for 25 minutes.
+- NEW respawn (fail-safe): journal 'Died' after the last 'Resurrect' -> INCIDENT REPORT: UI_Right (CONTINUE),
+  UI_Select; REDEPLOYMENT SUMMARY: UI_Right, UI_Down, UI_Right (REDEPLOY), UI_Select, UI_Select (CONFIRM AND
+  REDEPLOY) - the sequence of the recording 2026-10-22 17:44. Then the route continues from the redeploy station.
+- NEW planet guard in normal space (while leaving the mass lock): if the altitude above a planet goes down, pitch
+  up until it rises; below 'PlanetMinAltitude' (3000 m) throttle 0 first.
+- NEW jump blocked: when the FSD does not charge twice (target obscured by a planet, too close to it), turn 90 deg
+  away, fly 'JumpBlockedEscapeTime' (20 s) with the planet guard, align again.
+- FIX a failed 'enter supercruise' (mass locked 120 s) cancels the jump instead of aligning and jumping in normal
+  space; throttle 0 at the timeout.
+- Earnings: the rebuy cost and the purchase price of cargo lost with the ship count as costs.
+
 # 10/22/2026 v1.9.4 b42
 - NEW earnings counter on the main tab (STATUS): 'Earned (session)' since EDAP was started with cr/h, number of
   sales, costs and the last sale, and 'Earned (total)' over all sessions (configs/earnings.json, right click to

@@ -272,6 +272,69 @@ class WaypointRecovery:
             sleep(2)
         return False
 
+    # --- Respawn after the ship was destroyed ----------------------------------------------------------------------
+    # Recording 2026-10-22 17:44 (Type-9 crashed into the planet George Pantazis A 6, journal 'Died', then Music
+    # 'MainMenu'):
+    #   1. INCIDENT REPORT: buttons 'EXIT TO MAIN MENU' | 'CONTINUE' at the bottom -> UI_Right (CONTINUE), UI_Select.
+    #   2. REDEPLOYMENT SUMMARY: VESSEL SELECTION highlighted -> UI_Right (REDEPLOY LOCATION), UI_Down (FINANCIAL
+    #      SUPPORT), UI_Right (REDEPLOY button), UI_Select -> 'CONFIRM AND REDEPLOY' highlighted -> UI_Select.
+    #   3. Journal 'Resurrect' (Option 'rebuy'), 'Location' docked at the redeploy station ~8 s later.
+    def died_pending(self) -> bool:
+        """ True if the journal shows 'Died' after the last 'Resurrect'/'LoadGame'. """
+        try:
+            path = self.ap.jn.get_latest_log() or self.ap.jn.current_log
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 65536))
+                lines = f.read().decode('utf-8', errors='ignore').splitlines()
+        except Exception:
+            return False
+        for line in reversed(lines):
+            if '"event":"Resurrect"' in line.replace(' ', '') or '"event":"LoadGame"' in line.replace(' ', ''):
+                return False
+            if '"event":"Died"' in line.replace(' ', ''):
+                return True
+        return False
+
+    def respawn(self, attempt: int = 1) -> bool:
+        ap, keys = self.ap, self.ap.keys
+        self.log(f"The ship was destroyed. Rebuy and redeploy (attempt {attempt}).", True)
+        ap.update_ap_status(f"Respawn ({attempt})")
+        t0 = time.time()
+        txt = self._ocr_screen((0.0, 0.0, 1.0, 1.0))
+        if 'REDEPLOY' not in txt:
+            # 1. Incident report -> CONTINUE
+            if txt and 'INCIDENT' not in txt:
+                logger.debug(f"respawn: incident report not recognised ({txt[:80]}), pressing CONTINUE anyway")
+            keys.send('UI_Right')
+            sleep(0.6)
+            keys.send('UI_Select')
+            sleep(4)
+            txt = self._ocr_screen((0.0, 0.0, 1.0, 1.0))
+        if 'CONFIRMANDREDEPLOY' not in txt:
+            # 2. Redeployment summary: VESSEL SELECTION -> REDEPLOY LOCATION -> FINANCIAL SUPPORT -> REDEPLOY
+            if txt and 'REDEPLOY' not in txt:
+                logger.debug(f"respawn: redeployment summary not recognised ({txt[:80]})")
+            for k in ('UI_Right', 'UI_Down', 'UI_Right'):
+                keys.send(k)
+                sleep(0.5)
+            keys.send('UI_Select')  # REDEPLOY
+            sleep(1.8)
+        keys.send('UI_Select')  # CONFIRM AND REDEPLOY
+        # 3. Wait for the new ship
+        while time.time() - t0 < 120:
+            sleep(3)
+            if not self.died_pending() and ap.game_is_playable():
+                sleep(5)
+                st = ap.jn.ship_state()
+                self.log(f"Redeployed at {st.get('cur_station') or '?'} ({st.get('cur_star_system') or '?'}). "
+                         f"The cargo is lost, continuing the route.", True)
+                return True
+            if not self.died_pending() and time.time() - t0 > 30:
+                continue  # Resurrect written, still loading
+        self.log("Respawn: not back in the ship yet, trying again.")
+        return False
+
     def reconnect(self, attempt: int = 1) -> bool:
         """ Connection error dialog -> main menu -> CONTINUE -> game mode -> load the game. Returns True when the
         ship is back (Status.json flags). """
@@ -281,6 +344,9 @@ class WaypointRecovery:
             set_focus_elite_window()
         except Exception:
             pass
+        # Ship destroyed (journal 'Died', e.g. crashed into a planet): the rebuy screens, not the main menu
+        if self.died_pending():
+            return self.respawn(attempt)
         state = ap._journal_tail_game_state()
         if state == 'shutdown':
             self.log("Reconnect: the game was closed, it can not be started by EDAP. Waiting.")

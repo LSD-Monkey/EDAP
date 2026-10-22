@@ -16,7 +16,7 @@ from EDlogger import logger
 
 EARNINGS_FILE = './configs/earnings.json'
 COST_EVENTS = {'RefuelAll': 'Cost', 'RefuelPartial': 'Cost', 'RepairAll': 'Cost', 'Repair': 'Cost',
-               'BuyAmmo': 'Cost', 'RestockVehicle': 'Cost'}
+               'BuyAmmo': 'Cost', 'RestockVehicle': 'Cost', 'Resurrect': 'Cost'}
 
 
 def _ts(ev: dict) -> float | None:
@@ -64,7 +64,7 @@ class EarningsTracker:
     def on_event(self, ev: dict):
         """ Journal callback (every parsed event). """
         name = ev.get('event')
-        if name != 'MarketSell' and name not in COST_EVENTS:
+        if name not in ('MarketSell', 'MarketBuy', 'Died') and name not in COST_EVENTS:
             return
         ts = _ts(ev)
         with self.lock:
@@ -76,11 +76,22 @@ class EarningsTracker:
                     return  # a manual trade, not the bot
             except Exception:
                 pass
-            if name == 'MarketSell':
+            if name == 'MarketBuy':
+                # Paid for cargo that is not sold yet: lost if the ship is destroyed
+                self.total['open_purchase'] = int(self.total.get('open_purchase') or 0) + int(ev.get('TotalCost') or 0)
+            elif name == 'Died':
+                lost = int(self.total.get('open_purchase') or 0)
+                self.total['open_purchase'] = 0
+                self.session_costs += lost
+                self.total['costs'] = int(self.total.get('costs') or 0) + lost
+                self.last_trade = f"ship destroyed, cargo lost: -{fmt_cr(lost)} cr"
+                logger.info(f"Earnings: ship destroyed, cargo worth {lost:,} cr lost")
+            elif name == 'MarketSell':
                 count = int(ev.get('Count') or 0)
                 sale = int(ev.get('TotalSale') or 0)
                 paid = int(ev.get('AvgPricePaid') or 0) * count
                 profit = sale - paid if paid > 0 else 0  # unknown purchase price (e.g. mined): no profit counted
+                self.total['open_purchase'] = max(0, int(self.total.get('open_purchase') or 0) - paid)
                 self.session_profit += profit
                 self.session_sales += 1
                 self.session_tons += count
@@ -93,6 +104,9 @@ class EarningsTracker:
                             f"(session {self.session_profit:,} cr)")
             else:
                 cost = int(ev.get(COST_EVENTS[name]) or 0)
+                if name == 'Resurrect':
+                    self.last_trade = f"rebuy: -{fmt_cr(cost)} cr" + (f" ({self.last_trade})" if 'destroyed' in
+                                                                       self.last_trade else "")
                 self.session_costs += cost
                 self.total['costs'] = int(self.total.get('costs') or 0) + cost
             self.total['last_ts'] = ts

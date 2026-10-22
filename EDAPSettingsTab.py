@@ -117,6 +117,12 @@ SETTINGS: list[dict] = [
                                         "during Supercruise Assist, EDAP pitches up and flies the 'Line of sight "
                                         "escape' time, then re-activates the SCA. Prevents the emergency drop at "
                                         "a star that lies between the ship and the station. 0 = off."),
+    dict(section="Supercruise Assist", key="PlanetMinAltitude", label="Planet: min. altitude (m)", type="int",
+         min=500, max=50000, tip="Normal space near a planet: if the altitude goes down, EDAP pitches up until it rises "
+                                 "again; below this altitude it stops first (throttle 0)."),
+    dict(section="Supercruise Assist", key="JumpBlockedEscapeTime", label="Jump blocked: escape (s)", type="int",
+         min=5, max=120, tip="The FSD does not charge for the jump (target behind a planet, too close to it): "
+                             "turn 90 deg away, fly this long, align again."),
     dict(section="Supercruise Assist", key="SCAssistMaxActivations", label="Max. (re-)activations", type="int",
          min=1, max=20, tip="How often the SCA is (re-)activated for one destination before giving up."),
     dict(section="Supercruise Assist", key="SCAssistTimeout", label="Timeout (s)", type="int", min=0, max=14400,
