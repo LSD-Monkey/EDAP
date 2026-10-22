@@ -23,6 +23,7 @@ from EDGraphicsSettings import EDGraphicsSettings
 from EDShipControl import EDShipControl, CompassTargetOffset
 from EDStationServicesInShip import EDStationServicesInShip
 from EDRecovery import WaypointRecovery, presell_cargo
+from EDEarnings import EarningsTracker
 from EDSystemMap import EDSystemMap
 from EDlogger import logging
 import Image_Templates
@@ -220,6 +221,9 @@ class EDAutopilot:
         self.templ = Image_Templates.Image_Templates(self.scr.scaleX, self.scr.scaleY)
         self.scrReg = Screen_Regions.Screen_Regions(self.scr, self.templ)
         self.jn = EDJournal(cb)
+        # Credits earned by the bot (session / total), shown on the main tab
+        self.earnings = EarningsTracker(lambda: self._any_assist_active())
+        self.jn.event_callbacks.append(self.earnings.on_event)
         self.keys = EDKeys(cb)
         self.afk_combat = AFK_Combat(self, self.keys, self.jn, self.vce)
         self.waypoint = EDWayPoint(self, cb, self.jn.ship_state()['odyssey'])

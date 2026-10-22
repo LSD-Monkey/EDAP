@@ -213,6 +213,7 @@ def check_station_type(station_type: str, station_name: str, station_services: l
 class EDJournal:
     def __init__(self, cb):
         self.ap_ckb = cb
+        self.event_callbacks = []  # called with every parsed journal event (e.g. the earnings counter)
         self.last_mod_time = None
         self.log_file = None
         self.current_log = self.get_latest_log()
@@ -297,6 +298,11 @@ class EDJournal:
         self.last_mod_time = None
 
     def parse_line(self, log):
+        for cb in getattr(self, 'event_callbacks', ()):
+            try:
+                cb(log)
+            except Exception as e:
+                logger.debug(f"journal event callback: {e}")
         # parse data
         try:
             # parse ship status

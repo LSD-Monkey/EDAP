@@ -26,3 +26,5 @@ debug-output/
 runs/
 crash.log
 autopilot *.log
+configs/earnings.json
+configs/earnings.json.tmp

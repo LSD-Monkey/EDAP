@@ -741,10 +741,35 @@ class APGui:
                 self.live['waypoints'].configure(text="no file loaded")
 
             self.live['jumps'].configure(text=self._jump_text or "-")
+
+            earn = getattr(self.ed_ap, 'earnings', None)
+            if earn is not None:
+                from EDEarnings import fmt_cr
+                net = earn.session_net()
+                txt = f"{fmt_cr(net, sign=True)} cr"
+                if earn.session_sales:
+                    txt += f"  ({fmt_cr(earn.per_hour())} cr/h, {earn.session_sales} sales"
+                    if earn.session_costs:
+                        txt += f", costs {fmt_cr(earn.session_costs)}"
+                    txt += ")"
+                if earn.last_trade:
+                    txt += f"\nlast: {earn.last_trade}"
+                self.live['earn_session'].configure(text=txt, foreground="#57c26a" if net >= 0 else "#e06c6c")
+                tot = earn.total_net()
+                self.live['earn_total'].configure(
+                    text=f"{fmt_cr(tot, sign=True)} cr  ({earn.total.get('sales', 0)} sales, "
+                         f"{earn.total.get('tons', 0):,} t" +
+                         (f", since {earn.total.get('since')}" if earn.total.get('since') else "") + ")",
+                    foreground="#57c26a" if tot >= 0 else "#e06c6c")
         except Exception as e:
             logger.debug(f"live panel update failed: {e}")
         finally:
             self.root.after(1000, self._update_live_panel)
+
+    def _reset_earnings(self, event=None):
+        from tkinter import messagebox
+        if messagebox.askyesno("Earnings", "Reset the total earnings counter?"):
+            self.ed_ap.earnings.reset_total()
 
     def _market_test_fill_list(self):
         """ Fills the commodity dropdown with what the last opened market sells. """
@@ -1237,7 +1262,7 @@ class APGui:
         blk_live.columnconfigure(1, weight=1)
         rows = (('mode', 'Assist'), ('status', 'Activity'), ('runtime', 'Running for'), ('location', 'Location'),
                 ('ship', 'Ship'), ('fuel', 'Fuel'), ('cargo', 'Cargo'), ('waypoints', 'Waypoints'),
-                ('jumps', 'Jumps'))
+                ('jumps', 'Jumps'), ('earn_session', 'Earned (session)'), ('earn_total', 'Earned (total)'))
         r = 0
         for key, label in rows:
             ttk.Label(blk_live, text=label + ":", foreground="#9a9a9a").grid(row=r, column=0, sticky="NW", padx=2,
@@ -1255,6 +1280,14 @@ class APGui:
                 self.live[key].grid(row=r, column=1, sticky="W", padx=2, pady=1)
             r += 1
         self.live['mode'].configure(font=("Segoe UI", 10, "bold"))
+        for k in ('earn_session', 'earn_total'):
+            self.live[k].configure(font=("Segoe UI", 10, "bold"), foreground="#57c26a")
+        self._tip(self.live['earn_session'], "Trade profit of the bot since EDAP was started (sale minus purchase "
+                                             "price, journal 'MarketSell'), minus refuel/repair costs. Only trades "
+                                             "while an assist runs are counted.")
+        self._tip(self.live['earn_total'], "Same over all sessions (saved in configs/earnings.json). "
+                                           "Right click to reset.")
+        self.live['earn_total'].bind("<Button-3>", self._reset_earnings)
 
         # --- log
         log = ttk.LabelFrame(page0, text="LOG", padding=(10, 5))

@@ -1,3 +1,9 @@
+# 10/22/2026 v1.9.4 b42
+- NEW earnings counter on the main tab (STATUS): 'Earned (session)' since EDAP was started with cr/h, number of
+  sales, costs and the last sale, and 'Earned (total)' over all sessions (configs/earnings.json, right click to
+  reset). Counted from the journal while an assist runs: MarketSell sale minus the purchase price, minus refuel,
+  repair and ammo costs. Events from before the start of EDAP or already counted are skipped.
+
 # 10/22/2026 v1.9.4 b41
 - FIX after a login (reconnect) EDAP thought the ship was still in supercruise: the journal 'Location' event in
   space has no StationName/StationType/MarketID, reading it raised a KeyError and the old state stayed. 'LoadGame'
