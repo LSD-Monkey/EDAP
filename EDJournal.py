@@ -419,18 +419,23 @@ class EDJournal:
 
                 # parse location
             elif log_event == 'Location':
+                # Written after loading the game (login), also in space: then without StationName/StationType/MarketID
+                # (log['StationName'] raised a KeyError before, the ship state stayed 'in_supercruise' after a
+                # reconnect although the game always puts the ship into normal space at login).
                 self.ship['location'] = log['StarSystem']
                 self.ship['cur_star_system'] = log['StarSystem']
-                self.ship['cur_station'] = log['StationName']
-                self.ship['cur_station_type'] = log['StationType']
-                if 'StationServices' in log:
-                    self.ship['StationServices'] = log['StationServices']
-                else:
-                    self.ship['StationServices'] = []
-                self.ship['exp_station_type'] = check_station_type(log['StationType'], log['StationName'], self.ship['StationServices'])
-                self.ship['MarketID'] = log['MarketID']
-                if log['Docked'] == True:
+                if log.get('Docked'):
+                    self.ship['cur_station'] = log.get('StationName', '')
+                    self.ship['cur_station_type'] = log.get('StationType', '')
+                    self.ship['StationServices'] = log.get('StationServices', [])
+                    self.ship['exp_station_type'] = check_station_type(log.get('StationType', ''),
+                                                                       log.get('StationName', ''),
+                                                                       self.ship['StationServices'])
+                    self.ship['MarketID'] = log.get('MarketID', 0)
                     self.ship['status'] = 'in_station'
+                else:
+                    self.ship['cur_station'] = ''
+                    self.ship['status'] = 'in_space'
 
             elif log_event == 'Interdicted':
                 self.ship['interdicted'] = True
@@ -439,6 +444,12 @@ class EDJournal:
             elif log_event == 'LoadGame':
                 self.ship['type'] = log['Ship'].lower()
                 self.ship['ship_size'] = get_ship_size(log['Ship'])
+                # Login: the game never starts in supercruise or a jump. Forget the state before the logout
+                # (e.g. 'in_supercruise' when the connection was lost in supercruise). Location follows.
+                self.ship['status'] = 'in_space'
+                self.ship['interdicted'] = False
+                self.ship['sc_exit_body_type'] = ''
+                self.ship['SupercruiseDestinationDrop_type'] = None
 
             # Parse Loadout
             # When written: at startup, when loading from main menu, or when switching ships,

@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 from time import sleep
 
-from EDAP_data import FlagsBeingInterdicted, FlagsDocked
+from EDAP_data import FlagsBeingInterdicted, FlagsDocked, FlagsSupercruise
 from EDlogger import logger
 
 SORT_KEYS = {
@@ -176,6 +176,35 @@ class WaypointRecovery:
             sleep(10)
         self.log("Game is playable again, continuing Waypoint Assist in 15 s.", True)
         sleep(15)
+        self._after_login()
+
+    def _after_login(self):
+        """ After a login the ship is never in supercruise (normal space, or docked): reset what EDAP remembered
+        from before the logout, so the route starts with 'enter supercruise' and not with SC actions. """
+        ap = self.ap
+        try:
+            ap.stop_sco_monitoring()
+        except Exception as e:
+            if _is_interrupt(e):
+                raise
+        ap._launched_early = False
+        try:
+            st = ap.jn.ship_state()
+            docked = ap.status.get_flag(FlagsDocked)
+            if not docked:
+                st['status'] = 'in_space'
+            st['interdicted'] = False
+            st['sc_exit_body_type'] = ''
+            st['SupercruiseDestinationDrop_type'] = None
+            in_sc = ap.status.get_flag(FlagsSupercruise)
+            self.log("After login: " + ("docked." if docked else
+                                        ("in supercruise." if in_sc else "normal space, not in supercruise.")))
+            if not docked and not in_sc:
+                ap.set_throttle_0()
+        except Exception as e:
+            if _is_interrupt(e):
+                raise
+            logger.warning(f"after login: {e}")
 
     # --- Reconnect --------------------------------------------------------------------------------------------
     # Recording 2026-10-22 11:49:

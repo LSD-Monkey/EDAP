@@ -1,3 +1,17 @@
+# 10/22/2026 v1.9.4 b41
+- FIX after a login (reconnect) EDAP thought the ship was still in supercruise: the journal 'Location' event in
+  space has no StationName/StationType/MarketID, reading it raised a KeyError and the old state stayed. 'LoadGame'
+  now resets the state to normal space (the game never starts in supercruise), 'Location' sets docked or in space,
+  and after a reconnect the fail-safe resets SCO monitoring, the early launch and the emergency-drop flag and logs
+  'After login: normal space, not in supercruise'.
+- NEW adapt the purchase while trading ('TradeAdaptCommodity', on): at the buy station every commodity is rated
+  with the current stock (Market.json) and the prices of the destination station (Ardent, all orders of the system).
+  If the commodity that makes the money is short (stock below the free cargo) or no longer the best (less than 90%
+  of the best profit per ton), the hold is filled in the order of profit per ton, limited by stock and demand at the
+  destination; less than 'TradeMinProfitPerTon' (1000 cr/t) is not bought. The waypoint file is updated (this
+  station buys the new list, the destination sells it). When the stock is back, the route returns to the planned
+  commodity.
+
 # 10/22/2026 v1.9.4 b40 - reconnect after a connection error
 - NEW reconnect (fail-safe of Waypoint Assist, setting 'AutoReconnect', on by default), the sequence of the
   recording 2026-10-22 11:49:

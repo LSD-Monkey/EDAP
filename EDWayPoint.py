@@ -8,6 +8,7 @@ from EDAP_data import *
 from EDJournal import StationType
 from EDKeys import EDKeys
 from EDlogger import logger
+from EDTradeAdapt import adapt_buy_list
 from EDFuelPlanner import estimate_route_fuel
 import json
 from MarketParser import MarketParser
@@ -475,6 +476,15 @@ class EDWayPoint:
 
             sleep(1)
 
+            # --------- BUY ----------
+            # Supply of the planned commodity gone or prices changed: fill the hold with the best ones now
+            try:
+                if adapt_buy_list(self, ap, dest_key):
+                    buy_commodities = self.waypoints[dest_key]['BuyCommodities']
+            except Exception as e:
+                if type(e).__name__ in ('EDAP_Interrupt', 'EDAP_GameNotRunning'):
+                    raise
+                logger.warning(f"trade adapt failed: {e}")
             # --------- BUY ----------
             if len(buy_commodities) > 0 or len(global_buy_commodities) > 0:
                 # Select the BUY option

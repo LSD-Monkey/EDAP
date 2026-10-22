@@ -181,6 +181,10 @@ class ArdentClient:
     def system(self, system: str):
         return self.get(f"/system/name/{self.q(system)}")
 
+    def system_commodities(self, system: str):
+        """ All known buy/sell orders in the system (all stations). """
+        return self.get(f"/system/name/{self.q(system)}/commodities")
+
     def nearby(self, kind: str, system: str, symbol: str, max_distance: float, min_volume: int, max_days: float,
                carriers: bool):
         """ kind 'exports' (where to buy) or 'imports' (where to sell). """

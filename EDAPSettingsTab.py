@@ -75,6 +75,12 @@ SETTINGS: list[dict] = [
          min=5, max=80, tip="With the fail-safe on: below this fuel level (or if the fuel check says the route can "
                             "not be flown) the jumps stop and the ship docks at the nearest station with a fitting "
                             "pad to refuel, then continues."),
+    dict(section="Waypoint Assist", key="TradeAdaptCommodity", label="Trade: adapt the purchase", type="bool",
+         tip="At the buy station the commodities are rated with the current stock (Market.json) and the prices of "
+             "the destination (Ardent). If the planned commodity is short or no longer the best, the hold is "
+             "filled with the best ones (most profit per ton first). The waypoint file is updated."),
+    dict(section="Waypoint Assist", key="TradeMinProfitPerTon", label="Trade: min. profit (cr/t)", type="int",
+         min=0, max=100000, tip="Commodities with less profit per ton are not bought when adapting the purchase."),
     dict(section="Waypoint Assist", key="TradePreSellMinTons", label="Sell other cargo first above (t)",
          type="int", min=0, max=2000, tip="Starting a trade route with more than this many tons on board that the "
                                           "route does not sell: fly to the most profitable station nearby (Trade tab "

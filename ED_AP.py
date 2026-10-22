@@ -453,6 +453,8 @@ class EDAutopilot:
             "RefuelStopPercent": 25,  # fail-safe: below this fuel level fly to the nearest station to refuel
             "TradePreSellMinTons": 100,  # trade route start: sell other cargo above this first (0 = off)
             "TradeCarrierMaxAgeHours": 6,
+            "TradeAdaptCommodity": True,  # trade: refill the hold with the best commodities if the planned one is short
+            "TradeMinProfitPerTon": 1000,  # trade: commodities with less profit per ton are not bought when adapting
             "AutoReconnect": True,  # fail-safe: after a connection error press OK, CONTINUE, game mode, load again
             "ReconnectMode": "Solo",  # fail-safe: game mode for the reconnect ('Solo' or 'Open')  # Trade tab: max. age of carrier prices (carriers move, change orders)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
@@ -574,7 +576,8 @@ class EDAutopilot:
             for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
                          ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
                          ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6),
-                         ('AutoReconnect', True), ('ReconnectMode', 'Solo')):
+                         ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('TradeAdaptCommodity', True),
+                         ('TradeMinProfitPerTon', 1000)):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
