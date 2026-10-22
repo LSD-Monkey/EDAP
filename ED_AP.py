@@ -2816,6 +2816,10 @@ class EDAutopilot:
             self.start_sco_monitoring()
             return ok
 
+        if self.jn.ship_state().get('sc_exit_interdicted'):
+            boost = True  # after an interdiction: away from the interdictor as fast as possible
+            self.ap_ckb('log', "Dropped by an interdiction: full throttle and boost to enter supercruise.")
+
         self.random_pause(1.5)
         self.set_throttle_100()
 
@@ -2868,7 +2872,8 @@ class EDAutopilot:
     def _emergency_drop_at_star(self) -> bool:
         """ True if the last drop out of supercruise was at a star ('EMERGENCY STOP - TOO CLOSE!'). """
         try:
-            return (self.jn.ship_state().get('sc_exit_body_type') == 'Star' and
+            st = self.jn.ship_state()
+            return (st.get('sc_exit_body_type') == 'Star' and not st.get('sc_exit_interdicted') and
                     not self.status.get_flag(FlagsSupercruise) and not self.status.get_flag(FlagsDocked))
         except Exception:
             return False
@@ -2904,9 +2909,12 @@ class EDAutopilot:
         if not self.status.wait_for_flag_on(FlagsFsdCharging, 4) and not self._in_sc_or_jumping():
             self.ap_ckb('log', "Escape: FSD does not charge.")
             return False
-        # 3. Align with the escape vector (compass), throttle up
+        # 3. Align with the escape vector (compass) at full throttle: the game engages only at full throttle
+        #    ('THROTTLE UP TO ENGAGE'). Before, EDAP aligned at 50% and throttled up only after a successful compass
+        #    align; with the compass not found it kept charging at 50% for 25 minutes, 100% by hand fixed it
+        #    (2026-10-22 20:55-21:20).
         t0 = time.time()
-        self.set_throttle_50()  # best turn rate
+        self.set_throttle_100()
         while time.time() - t0 < 45:
             if self._in_sc_or_jumping():
                 break
@@ -2919,8 +2927,8 @@ class EDAutopilot:
                 aligned = False
             if self._in_sc_or_jumping():
                 break
+            self.set_throttle_100()  # 'THROTTLE UP TO ENGAGE'
             if aligned:
-                self.set_throttle_100()  # 'THROTTLE UP TO ENGAGE'
                 for _ in range(10):
                     if self._in_sc_or_jumping():
                         break
@@ -3039,13 +3047,27 @@ class EDAutopilot:
             t0 = time.time()
             while self.status.get_flag(FlagsFsdMassLocked) and time.time() - t0 < 60:
                 sleep(0.5)
+            self.set_throttle_100()  # supercruise engages at full throttle only in some cases (escape vector)
             if not (self.status.get_flag(FlagsFsdCharging) or self.status.get_flag(FlagsFsdJump)):
                 self.keys.send('Supercruise')
             # Wait for the FSD to charge and jump
             t0 = time.time()
+            aligned_once = False
             while time.time() - t0 < 25:
                 if self.status.get_flag(FlagsFsdJump) or self.status.get_flag(FlagsSupercruise):
                     return True
+                if not aligned_once and time.time() - t0 > 10 and self.status.get_flag(FlagsFsdCharging):
+                    # Charged but no jump: 'ALIGN WITH ESCAPE VECTOR' (close to a star, e.g. after an interdiction)
+                    aligned_once = True
+                    self.ap_ckb('log', "FSD charged but supercruise not engaged: aligning with the compass "
+                                       "(escape vector?) at full throttle.")
+                    try:
+                        self.compass_align(self.scrReg)
+                    except EDAP_Interrupt:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"press supercruise: compass align: {e}")
+                    self.set_throttle_100()
                 if boost and not self.status.get_flag(FlagsFsdCharging):
                     self.keys.send('UseBoostJuice')
                 sleep(1)

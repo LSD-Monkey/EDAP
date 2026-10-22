@@ -1,3 +1,14 @@
+# 10/22/2026 v1.9.4 b44
+Log/journal 2026-10-22 20:54-21:20: 41 s after arriving in AD Leonis an NPC interdicted the ship (submitted) while
+EDAP was selecting Homer Platform in the Nav Panel. The journal names the nearest body of the interdiction drop:
+the star AD Leonis A. EDAP took that for an emergency stop at the star and ran the escape-vector routine: FSD
+charged, compass not found, throttle 50% - for 25 minutes. 100% throttle by hand engaged supercruise at once.
+- FIX an interdiction drop is no longer taken for an emergency drop at the star (journal 'Interdicted' at the
+  time of the 'SupercruiseExit'); after an interdiction supercruise is entered with full throttle and boost.
+- FIX escape vector routine and 'enter supercruise': full throttle while the FSD charges (the game engages only at
+  full throttle, 'THROTTLE UP TO ENGAGE'), not only after a successful compass alignment. If the FSD is charged
+  but supercruise does not engage after 10 s, EDAP aligns with the compass (escape vector) at full throttle.
+
 # 10/22/2026 v1.9.4 b43 - ship destroyed: respawn; planet safety
 Log/journal 2026-10-22 17:02-17:19: after undocking from Zamka Platform the route to Teegarden's star went through
 the planet George Pantazis A 6. 'FSD failed to charge' 5x, the ship dropped out of supercruise at the planet,

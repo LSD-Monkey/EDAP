@@ -364,6 +364,11 @@ class EDJournal:
                 self.ship['status'] = 'in_space'
                 self.ship['body'] = log['Body']
                 self.ship['sc_exit_body_type'] = log.get('BodyType', '')
+                # Dropped by an interdiction (the journal then names the nearest body, often the star): not an
+                # emergency stop at the star (2026-10-22 20:54, NPC interdiction at AD Leonis A)
+                self.ship['sc_exit_interdicted'] = bool(log.get('timestamp') and
+                                                        self.ship.get('interdicted_ts', '')[:16] ==
+                                                        log.get('timestamp', '')[:16])
 
             elif log_event == 'SupercruiseDestinationDrop':
                 # {
@@ -445,6 +450,7 @@ class EDJournal:
 
             elif log_event == 'Interdicted':
                 self.ship['interdicted'] = True
+                self.ship['interdicted_ts'] = log.get('timestamp', '')
 
             # parse ship type
             elif log_event == 'LoadGame':
