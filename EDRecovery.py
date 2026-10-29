@@ -301,81 +301,65 @@ class WaypointRecovery:
         return False
 
     def respawn(self, attempt: int = 1) -> bool:
-        """ Rebuy screens, recognised one by one (logs 2026-10-27/29: the fixed key sequence ran into the CHOOSE
-        VESSEL screen, its UI_Right went from REBUY SHIP to GET FREE SHIP and the bot redeployed in a free
-        Sidewinder 5 times, and the Type-9 with its modules was lost each time):
-          SHIP DESTROYED ............ UI_Select (CONTINUE)
-          INCIDENT REPORT ........... UI_Right (CONTINUE), UI_Select
-          CHOOSE VESSEL ............. UI_Left (REBUY SHIP), UI_Select  - never the free ship
-          REDEPLOYMENT SUMMARY ...... a free Sidewinder selected -> back to VESSEL SELECTION -> CHOOSE VESSEL;
-                                      else VESSEL SELECTION -> REDEPLOY LOCATION -> FINANCIAL SUPPORT -> REDEPLOY
-          CONFIRM AND REDEPLOY ...... UI_Select
-        Only small screen regions are read (the full screen OCR took 60 s, the screen had changed meanwhile). """
+        """ Rebuy screens as in the recording 2026-10-29 14:22 (the ship selection is never opened):
+          SHIP DESTROYED ........ CONTINUE is selected -> UI_Select
+          INCIDENT REPORT ....... ~5 s 'LOADING REPORT' (title already shown, keys would be lost), then CONTINUE is
+                                  highlighted -> UI_Right (stays on CONTINUE), UI_Select
+          REDEPLOYMENT SUMMARY .. VESSEL SELECTION highlighted -> UI_Right, UI_Down, UI_Right to the REDEPLOY button.
+                                  Each step is checked with the highlight (orange block): UI_Select only when the
+                                  REDEPLOY button is highlighted. A UI_Select on VESSEL SELECTION opened CHOOSE VESSEL
+                                  before, and its UI_Right chose GET FREE SHIP (5 Type-9 lost, 2026-10-27/29).
+          CONFIRM AND REDEPLOY .. UI_Select
+        Only small regions are read with OCR (the full screen took 60 s). """
         ap, keys = self.ap, self.ap.keys
         self.log(f"The ship was destroyed. Rebuy and redeploy (attempt {attempt}).", True)
         ap.update_ap_status(f"Respawn ({attempt})")
         t0 = time.time()
         allow_free = bool(self._cfg('RespawnAllowFreeShip', False))
-        confirmed = False
         while time.time() - t0 < 240:
             if not self.died_pending():
                 break  # 'Resurrect' written
             title = self._ocr_screen((0.0, 0.0, 0.6, 0.14), scale=0.5)
-            centre = '' if any(k in title for k in ('INCIDENTREPORT', 'REDEPLOYMENTSUMMARY', 'CHOOSEVESSEL')) \
-                else self._ocr_screen((0.25, 0.25, 0.75, 0.8), scale=0.5)
             if 'CHOOSEVESSEL' in title:
-                centre = self._ocr_screen((0.0, 0.1, 0.8, 0.9), scale=0.5)  # 'REBUY SHIP' / 'GET FREE SHIP'
+                self.log("Respawn: ship selection open, leaving it without a choice (UI_Back).")
+                keys.send('UI_Back')
+                sleep(2)
+                continue
             if 'REDEPLOYMENTSUMMARY' in title:
-                # The confirmation ('CONFIRM AND REDEPLOY' / 'CANCEL') replaces the REDEPLOY button bottom right
-                centre = self._ocr_screen((0.5, 0.7, 1.0, 1.0), scale=0.5)
-            txt = title + centre
-            if 'CONFIRMANDREDEPLOY' in txt:
-                if confirmed or not self._summary_is_free_ship():
-                    keys.send('UI_Select')
+                bottom = self._ocr_screen((0.5, 0.7, 1.0, 1.0), scale=0.5)
+                if 'CONFIRMANDREDEPLOY' in bottom:
                     self.log("Respawn: confirm and redeploy.")
+                    keys.send('UI_Select')
                     sleep(4)
-                else:
-                    keys.send('UI_Back')  # cancel, a free ship is selected
-                    sleep(1.5)
-            elif 'CHOOSEVESSEL' in txt or ('REBUYSHIP' in txt and 'FREESHIP' in txt):
-                if centre and 'REBUY' not in txt and not allow_free:
-                    self.log("Respawn: no rebuy offered (not enough credits?). Not taking the free ship, "
-                             "please check the game.", True)
+                    continue
+                if self._summary_is_free_ship() and not allow_free:
+                    self.log("Respawn: the redeployment offers only the FREE Sidewinder (own ship lost / rebuy not "
+                             "affordable?). Not confirming, please decide in the game.", True)
                     sleep(30)
                     continue
-                self.log("Respawn: choose vessel -> REBUY SHIP.")
-                keys.send('UI_Left', repeat=3)
+                if self._goto_redeploy_button():
+                    keys.send('UI_Select')  # REDEPLOY -> 'CONFIRM AND REDEPLOY'
+                    sleep(2)
+                else:
+                    sleep(2)
+                continue
+            if 'INCIDENTREPORT' in title:
+                box = self._highlight_box()
+                if box is None or box[4] < 3.0:
+                    sleep(1.5)  # 'LOADING REPORT': no button yet
+                    continue
+                keys.send('UI_Right')  # CONTINUE (right of 'EXIT TO MAIN MENU')
                 sleep(0.6)
                 keys.send('UI_Select')
-                sleep(3)
-            elif 'REDEPLOYMENTSUMMARY' in txt:
-                free = self._summary_is_free_ship()
-                # Normalise the highlight: VESSEL SELECTION is the top left tile
-                keys.send('UI_Left', repeat=3)
-                keys.send('UI_Up', repeat=3)
-                sleep(0.5)
-                if free and not allow_free:
-                    self.log("Respawn: a free Sidewinder is selected, changing to the rebuy of the own ship.", True)
-                    keys.send('UI_Select')  # VESSEL SELECTION -> CHOOSE VESSEL
-                    sleep(3)
-                    continue
-                for k in ('UI_Right', 'UI_Down', 'UI_Right'):
-                    keys.send(k)
-                    sleep(0.5)
-                keys.send('UI_Select')  # REDEPLOY -> confirmation
-                confirmed = True
-                sleep(2)
-            elif 'INCIDENTREPORT' in txt:
-                keys.send('UI_Right')
-                sleep(0.6)
+                sleep(4)
+                continue
+            centre = self._ocr_screen((0.25, 0.25, 0.75, 0.8), scale=0.5)
+            if 'SHIPDESTROYED' in centre or 'DESTROYED' in centre:
                 keys.send('UI_Select')  # CONTINUE
                 sleep(4)
-            elif 'SHIPDESTROYED' in txt or 'DESTROYED' in txt:
-                keys.send('UI_Select')  # CONTINUE
-                sleep(4)
-            else:
-                logger.debug(f"respawn: screen not recognised ({txt[:100]})")
-                sleep(3)
+                continue
+            logger.debug(f"respawn: screen not recognised ({(title + '|' + centre)[:100]})")
+            sleep(2)
         # Wait for the new ship
         while time.time() - t0 < 300:
             if not self.died_pending() and ap.game_is_playable():
@@ -393,6 +377,60 @@ class WaypointRecovery:
                 return True
             sleep(3)
         self.log("Respawn: not back in the ship yet, trying again.")
+        return False
+
+    def _highlight_box(self):
+        """ The highlighted menu element = the largest solid orange block on the screen.
+        Returns (cx, cy, w, h, aspect) in screen fractions, or None. """
+        try:
+            import cv2
+            import numpy as np
+            img = self.ap.scr.get_screen_rect_pct([0.0, 0.0, 1.0, 1.0])
+            if img is None:
+                return None
+            img = cv2.resize(img, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)[:, :, :3].astype(int)
+            a, b, c = img[:, :, 0], img[:, :, 1], img[:, :, 2]
+            mid = (b > 60) & (b < 180)
+            mask = (((a > 190) & mid & (c < 90)) | ((c > 190) & mid & (a < 90))).astype(np.uint8)
+            n, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+            if n <= 1:
+                return None
+            i = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            x, y, w, h, area = stats[i]
+            H, W = mask.shape
+            if area < 0.0015 * H * W:
+                return None
+            return ((x + w / 2) / W, (y + h / 2) / H, w / W, h / H, (w / W * W) / max(1, h))
+        except Exception as e:
+            if _is_interrupt(e):
+                raise
+            logger.debug(f"highlight box: {e}")
+            return None
+
+    def _is_redeploy_highlighted(self, box) -> bool:
+        # REDEPLOY: wide flat button on the right (tiles are about square, 'BACK TO REPORT' is on the left)
+        return box is not None and box[4] > 4.0 and box[0] > 0.5 and box[1] > 0.7
+
+    def _goto_redeploy_button(self) -> bool:
+        """ From VESSEL SELECTION (highlighted after loading): right, down, right. Checked after every key, never
+        a UI_Select here. """
+        keys = self.ap.keys
+        box = None
+        for _ in range(10):
+            box = self._highlight_box()
+            if box is not None:
+                break
+            sleep(0.5)  # tiles still loading
+        # (box None: a white highlighted tile, e.g. REDEPLOY LOCATION - the moves below still lead to REDEPLOY)
+        moves = ['UI_Right', 'UI_Down', 'UI_Right', 'UI_Down', 'UI_Right', 'UI_Down', 'UI_Right']
+        for k in [None] + moves:
+            if k:
+                keys.send(k)
+                sleep(0.6)
+                box = self._highlight_box()
+            if self._is_redeploy_highlighted(box):
+                return True
+        logger.debug(f"respawn: REDEPLOY button not reached (highlight {box})")
         return False
 
     def _summary_is_free_ship(self) -> bool:

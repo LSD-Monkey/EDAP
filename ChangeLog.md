@@ -1,3 +1,12 @@
+# 10/29/2026 v1.9.4 b46 - respawn as in the recording 2026-10-29 14:22
+- The ship selection (CHOOSE VESSEL) is never opened any more. REDEPLOYMENT SUMMARY: right, down, right to the
+  REDEPLOY button; after every key the highlighted element (largest solid orange block) is checked and UI_Select is
+  only pressed when the REDEPLOY button (wide flat block bottom right) is highlighted. If the ship selection opens
+  anyway it is left with UI_Back without a choice.
+- INCIDENT REPORT: waits until the report is loaded (~5 s 'LOADING REPORT', the title is already shown and keys
+  were lost) - the CONTINUE button is highlighted then.
+- Only the free Sidewinder offered (warning 'CHOOSING A FREE SIDEWINDER ...'): not confirmed, EDAP waits for you.
+
 # 10/29/2026 v1.9.4 b45 - respawn: always rebuy the own ship
 Logs 2026-10-27/29: after every destruction EDAP redeployed in a FREE Sidewinder (journal 'Resurrect' Option
 'free'), the Type-9 with its modules was lost each time. The respawn pressed a fixed key sequence and read the whole
