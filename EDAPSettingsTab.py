@@ -64,6 +64,10 @@ SETTINGS: list[dict] = [
                           "wait until the game is playable again."),
     dict(section="Waypoint Assist", key="ReconnectMode", label="Fail-safe: game mode for reconnect", type="choice",
          choices=["Solo", "Open"], tip="Game mode chosen when reconnecting."),
+    dict(section="Waypoint Assist", key="RespawnAllowFreeShip", label="Respawn: allow the free Sidewinder",
+         type="bool", tip="Off (recommended): after the ship was destroyed EDAP always rebuys your own ship. If no "
+                          "rebuy is offered it waits; if it ever lands in a free ship, Waypoint Assist stops. "
+                          "The free Sidewinder means the permanent loss of the destroyed ship and its modules."),
     dict(section="Waypoint Assist", key="WaypointRecoveryJumps", label="Fail-safe: jumps out and back", type="int",
          min=1, max=10, tip="How often the fail-safe jumps to a neighbour system and back before the long wait."),
     dict(section="Waypoint Assist", key="WaypointRecoveryWait", label="Fail-safe: wait (min)", type="int",

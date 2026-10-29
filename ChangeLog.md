@@ -1,3 +1,15 @@
+# 10/29/2026 v1.9.4 b45 - respawn: always rebuy the own ship
+Logs 2026-10-27/29: after every destruction EDAP redeployed in a FREE Sidewinder (journal 'Resurrect' Option
+'free'), the Type-9 with its modules was lost each time. The respawn pressed a fixed key sequence and read the whole
+screen with OCR (60 s per read, the screen had changed meanwhile). The keys landed on the CHOOSE VESSEL screen
+('REBUY SHIP | GET FREE SHIP'), where UI_Right (meant for CONTINUE of the incident report) selected GET FREE SHIP.
+- NEW respawn as a state machine: every step reads only the title (top left, half resolution, ~1-2 s) and reacts
+  to the screen shown: SHIP DESTROYED -> CONTINUE; INCIDENT REPORT -> CONTINUE; CHOOSE VESSEL -> REBUY SHIP (left);
+  REDEPLOYMENT SUMMARY -> if the free Sidewinder is selected ('CHOOSING A FREE SIDEWINDER WILL CAUSE THE PERMANENT
+  LOSS...') back to VESSEL SELECTION and choose REBUY, else REDEPLOY; CONFIRM AND REDEPLOY -> confirm.
+- The free ship is never taken ('RespawnAllowFreeShip', off). No rebuy offered: EDAP waits. Redeployed in a free
+  ship anyway: Waypoint Assist stops instead of flying the trade route in a Sidewinder (4 more losses on 10-27).
+
 # 10/22/2026 v1.9.4 b44
 Log/journal 2026-10-22 20:54-21:20: 41 s after arriving in AD Leonis an NPC interdicted the ship (submitted) while
 EDAP was selecting Homer Platform in the Nav Panel. The journal names the nearest body of the interdiction drop:

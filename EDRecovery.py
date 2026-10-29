@@ -217,10 +217,14 @@ class WaypointRecovery:
     #      'Commander', 'LoadGame' ~30 s later).
     MODE_INDEX = {'open': 0, 'open play': 0, 'solo': 2, 'solo play': 2}
 
-    def _ocr_screen(self, rect=(0.15, 0.15, 0.85, 0.85)) -> str:
-        """ Upper case text of a screen region without spaces ('' if not readable). """
+    def _ocr_screen(self, rect=(0.15, 0.15, 0.85, 0.85), scale: float = 1.0) -> str:
+        """ Upper case text of a screen region without spaces ('' if not readable). scale < 1 makes the OCR of
+        large regions much faster (big menu texts stay readable). """
         try:
             img = self.ap.scr.get_screen_rect_pct(list(rect))
+            if img is not None and scale != 1.0:
+                import cv2
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             txt = self.ap.ocr.image_simple_ocr(img, 'reconnect') if img is not None else None
         except Exception as e:
             if _is_interrupt(e):
@@ -297,43 +301,119 @@ class WaypointRecovery:
         return False
 
     def respawn(self, attempt: int = 1) -> bool:
+        """ Rebuy screens, recognised one by one (logs 2026-10-27/29: the fixed key sequence ran into the CHOOSE
+        VESSEL screen, its UI_Right went from REBUY SHIP to GET FREE SHIP and the bot redeployed in a free
+        Sidewinder 5 times, and the Type-9 with its modules was lost each time):
+          SHIP DESTROYED ............ UI_Select (CONTINUE)
+          INCIDENT REPORT ........... UI_Right (CONTINUE), UI_Select
+          CHOOSE VESSEL ............. UI_Left (REBUY SHIP), UI_Select  - never the free ship
+          REDEPLOYMENT SUMMARY ...... a free Sidewinder selected -> back to VESSEL SELECTION -> CHOOSE VESSEL;
+                                      else VESSEL SELECTION -> REDEPLOY LOCATION -> FINANCIAL SUPPORT -> REDEPLOY
+          CONFIRM AND REDEPLOY ...... UI_Select
+        Only small screen regions are read (the full screen OCR took 60 s, the screen had changed meanwhile). """
         ap, keys = self.ap, self.ap.keys
         self.log(f"The ship was destroyed. Rebuy and redeploy (attempt {attempt}).", True)
         ap.update_ap_status(f"Respawn ({attempt})")
         t0 = time.time()
-        txt = self._ocr_screen((0.0, 0.0, 1.0, 1.0))
-        if 'REDEPLOY' not in txt:
-            # 1. Incident report -> CONTINUE
-            if txt and 'INCIDENT' not in txt:
-                logger.debug(f"respawn: incident report not recognised ({txt[:80]}), pressing CONTINUE anyway")
-            keys.send('UI_Right')
-            sleep(0.6)
-            keys.send('UI_Select')
-            sleep(4)
-            txt = self._ocr_screen((0.0, 0.0, 1.0, 1.0))
-        if 'CONFIRMANDREDEPLOY' not in txt:
-            # 2. Redeployment summary: VESSEL SELECTION -> REDEPLOY LOCATION -> FINANCIAL SUPPORT -> REDEPLOY
-            if txt and 'REDEPLOY' not in txt:
-                logger.debug(f"respawn: redeployment summary not recognised ({txt[:80]})")
-            for k in ('UI_Right', 'UI_Down', 'UI_Right'):
-                keys.send(k)
+        allow_free = bool(self._cfg('RespawnAllowFreeShip', False))
+        confirmed = False
+        while time.time() - t0 < 240:
+            if not self.died_pending():
+                break  # 'Resurrect' written
+            title = self._ocr_screen((0.0, 0.0, 0.6, 0.14), scale=0.5)
+            centre = '' if any(k in title for k in ('INCIDENTREPORT', 'REDEPLOYMENTSUMMARY', 'CHOOSEVESSEL')) \
+                else self._ocr_screen((0.25, 0.25, 0.75, 0.8), scale=0.5)
+            if 'CHOOSEVESSEL' in title:
+                centre = self._ocr_screen((0.0, 0.1, 0.8, 0.9), scale=0.5)  # 'REBUY SHIP' / 'GET FREE SHIP'
+            if 'REDEPLOYMENTSUMMARY' in title:
+                # The confirmation ('CONFIRM AND REDEPLOY' / 'CANCEL') replaces the REDEPLOY button bottom right
+                centre = self._ocr_screen((0.5, 0.7, 1.0, 1.0), scale=0.5)
+            txt = title + centre
+            if 'CONFIRMANDREDEPLOY' in txt:
+                if confirmed or not self._summary_is_free_ship():
+                    keys.send('UI_Select')
+                    self.log("Respawn: confirm and redeploy.")
+                    sleep(4)
+                else:
+                    keys.send('UI_Back')  # cancel, a free ship is selected
+                    sleep(1.5)
+            elif 'CHOOSEVESSEL' in txt or ('REBUYSHIP' in txt and 'FREESHIP' in txt):
+                if centre and 'REBUY' not in txt and not allow_free:
+                    self.log("Respawn: no rebuy offered (not enough credits?). Not taking the free ship, "
+                             "please check the game.", True)
+                    sleep(30)
+                    continue
+                self.log("Respawn: choose vessel -> REBUY SHIP.")
+                keys.send('UI_Left', repeat=3)
+                sleep(0.6)
+                keys.send('UI_Select')
+                sleep(3)
+            elif 'REDEPLOYMENTSUMMARY' in txt:
+                free = self._summary_is_free_ship()
+                # Normalise the highlight: VESSEL SELECTION is the top left tile
+                keys.send('UI_Left', repeat=3)
+                keys.send('UI_Up', repeat=3)
                 sleep(0.5)
-            keys.send('UI_Select')  # REDEPLOY
-            sleep(1.8)
-        keys.send('UI_Select')  # CONFIRM AND REDEPLOY
-        # 3. Wait for the new ship
-        while time.time() - t0 < 120:
-            sleep(3)
+                if free and not allow_free:
+                    self.log("Respawn: a free Sidewinder is selected, changing to the rebuy of the own ship.", True)
+                    keys.send('UI_Select')  # VESSEL SELECTION -> CHOOSE VESSEL
+                    sleep(3)
+                    continue
+                for k in ('UI_Right', 'UI_Down', 'UI_Right'):
+                    keys.send(k)
+                    sleep(0.5)
+                keys.send('UI_Select')  # REDEPLOY -> confirmation
+                confirmed = True
+                sleep(2)
+            elif 'INCIDENTREPORT' in txt:
+                keys.send('UI_Right')
+                sleep(0.6)
+                keys.send('UI_Select')  # CONTINUE
+                sleep(4)
+            elif 'SHIPDESTROYED' in txt or 'DESTROYED' in txt:
+                keys.send('UI_Select')  # CONTINUE
+                sleep(4)
+            else:
+                logger.debug(f"respawn: screen not recognised ({txt[:100]})")
+                sleep(3)
+        # Wait for the new ship
+        while time.time() - t0 < 300:
             if not self.died_pending() and ap.game_is_playable():
                 sleep(5)
                 st = ap.jn.ship_state()
-                self.log(f"Redeployed at {st.get('cur_station') or '?'} ({st.get('cur_star_system') or '?'}). "
-                         f"The cargo is lost, continuing the route.", True)
+                option = self._last_resurrect_option()
+                self.log(f"Redeployed ({option}) at {st.get('cur_station') or '?'} ({st.get('cur_star_system') or '?'}) "
+                         f"in a {st.get('type') or '?'}. The cargo is lost.", True)
+                if option == 'free' and not allow_free:
+                    # Never fly a trade route in a free Sidewinder (it died 4 more times on 2026-10-27)
+                    self.log("Redeployed in a FREE ship, the own ship is lost. Waypoint Assist stops, please check "
+                             "the shipyard.", True)
+                    from ED_AP import EDAP_Interrupt
+                    raise EDAP_Interrupt()
                 return True
-            if not self.died_pending() and time.time() - t0 > 30:
-                continue  # Resurrect written, still loading
+            sleep(3)
         self.log("Respawn: not back in the ship yet, trying again.")
         return False
+
+    def _summary_is_free_ship(self) -> bool:
+        """ REDEPLOYMENT SUMMARY / confirmation: is the free Sidewinder selected? (vessel tile and the warning
+        'CHOOSING A FREE SIDEWINDER WILL CAUSE THE PERMANENT LOSS OF YOUR DESTROYED SHIP') """
+        t = self._ocr_screen((0.0, 0.12, 0.7, 0.9), scale=0.5)
+        return 'CHOOSINGAFREE' in t or 'PERMANENTLOSS' in t or ('SIDEWINDER' in t and 'FREE' in t)
+
+    def _last_resurrect_option(self) -> str:
+        try:
+            path = self.ap.jn.get_latest_log() or self.ap.jn.current_log
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 65536))
+                lines = f.read().decode('utf-8', errors='ignore').splitlines()
+            for line in reversed(lines):
+                if '"Resurrect"' in line:
+                    return json.loads(line).get('Option', '?')
+        except Exception:
+            pass
+        return '?'
 
     def reconnect(self, attempt: int = 1) -> bool:
         """ Connection error dialog -> main menu -> CONTINUE -> game mode -> load the game. Returns True when the

@@ -461,6 +461,7 @@ class EDAutopilot:
             "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
             "TradeAdaptCommodity": True,  # trade: refill the hold with the best commodities if the planned one is short
             "TradeMinProfitPerTon": 1000,  # trade: commodities with less profit per ton are not bought when adapting
+            "RespawnAllowFreeShip": False,  # respawn: never take the free Sidewinder (own ship lost), stop instead
             "AutoReconnect": True,  # fail-safe: after a connection error press OK, CONTINUE, game mode, load again
             "ReconnectMode": "Solo",  # fail-safe: game mode for the reconnect ('Solo' or 'Open')  # Trade tab: max. age of carrier prices (carriers move, change orders)
             "FuelRouteCheck": True,  # Waypoint: check the fuel for the plotted route before jumping (no fuel scoop)
@@ -582,7 +583,7 @@ class EDAutopilot:
             for k, v in (('WaypointNeverStop', True), ('WaypointRecoveryJumps', 3), ('WaypointRecoveryWait', 30),
                          ('WaypointRecoveryNewRoute', True), ('RefuelStopPercent', 25),
                          ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6),
-                         ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('TradeAdaptCommodity', True),
+                         ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('RespawnAllowFreeShip', False), ('TradeAdaptCommodity', True),
                          ('TradeMinProfitPerTon', 1000), ('PlanetMinAltitude', 3000),
                          ('JumpBlockedEscapeTime', 20)):
                 cnf.setdefault(k, v)
