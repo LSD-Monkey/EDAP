@@ -85,6 +85,9 @@ SETTINGS: list[dict] = [
              "filled with the best ones (most profit per ton first). The waypoint file is updated."),
     dict(section="Waypoint Assist", key="TradeMinProfitPerTon", label="Trade: min. profit (cr/t)", type="int",
          min=0, max=100000, tip="Commodities with less profit per ton are not bought when adapting the purchase."),
+    dict(section="Waypoint Assist", key="TradeDumpForeignCargo", label="Trade: sell cargo the route does not use",
+         type="bool", tip="At every trade station: cargo that no station of the route sells (e.g. left over from "
+                          "another route) is sold there if the station buys it, so it does not block the hold."),
     dict(section="Waypoint Assist", key="TradePreSellMinTons", label="Sell other cargo first above (t)",
          type="int", min=0, max=2000, tip="Starting a trade route with more than this many tons on board that the "
                                           "route does not sell: fly to the most profitable station nearby (Trade tab "
@@ -127,6 +130,10 @@ SETTINGS: list[dict] = [
     dict(section="Supercruise Assist", key="JumpBlockedEscapeTime", label="Jump blocked: escape (s)", type="int",
          min=5, max=120, tip="The FSD does not charge for the jump (target behind a planet, too close to it): "
                              "turn 90 deg away, fly this long, align again."),
+    dict(section="Supercruise Assist", key="SCAssistApproachTime", label="Not getting closer after (s)", type="int",
+         min=0, max=1800, tip="The distance to the target changes but never reaches a new minimum (the ship circles "
+                              "around the target) for this long: activate the SCA again; the 3rd time give up. "
+                              "0 = off."),
     dict(section="Supercruise Assist", key="SCAssistMaxActivations", label="Max. (re-)activations", type="int",
          min=1, max=20, tip="How often the SCA is (re-)activated for one destination before giving up."),
     dict(section="Supercruise Assist", key="SCAssistTimeout", label="Timeout (s)", type="int", min=0, max=14400,

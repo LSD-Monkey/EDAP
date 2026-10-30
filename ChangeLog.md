@@ -1,3 +1,17 @@
+# 10/30/2026 v1.9.4 b47 - blocked hold, circling around the station
+Log 2026-10-30: 20 sales until 12:31, then nothing. A new route (Nelson Dock <-> Duncan's Den) was started with
+752 t Resonating Separators on board. 'Sell the cargo first' chose 'Deluc Settlement', which was not in the Nav
+Panel list; the route then flew 1.5 hours with a full hold that neither station buys ('Free cargo space: 0',
+'Unable to sell Gold'). Before that (11:17-12:22) the ship circled around Di Fiore Meteor Manor for 65 minutes in
+supercruise (distance 32 -> 22 -> 5.6 -> 29 -> 48 Ls ...), the stall watchdog was reset by every change.
+- NEW at every trade station cargo the route does not use is sold if the station buys it ('TradeDumpForeignCargo').
+- NEW nothing sold and nothing bought at 2 trade stations in a row -> fail-safe: sell the cargo at the best station
+  nearby, the 2nd time start another route.
+- 'Sell the cargo first': only orbital stations of a known type (no settlements / planetary unless allowed), up to
+  3 stations are tried.
+- NEW approach watchdog of the Supercruise Assist: no new minimum distance for 'SCAssistApproachTime' (180 s) ->
+  activate the SCA again, the 3rd time give up (fail-safe).
+
 # 10/29/2026 v1.9.4 b46 - respawn as in the recording 2026-10-29 14:22
 - The ship selection (CHOOSE VESSEL) is never opened any more. REDEPLOYMENT SUMMARY: right, down, right to the
   REDEPLOY button; after every key the highlighted element (largest solid orange block) is checked and UI_Select is

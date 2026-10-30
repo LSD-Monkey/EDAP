@@ -308,6 +308,58 @@ class EDWayPoint:
         self.ap_ckb('log+vce', f"Unable to buy {name}.")
         return 0
 
+    def _route_commodities(self) -> set[str] | None:
+        """ Normalised names of all commodities the route sells or buys; None if the route sells 'ALL'. """
+        import re as _re
+        names = set()
+        for k, wp in (self.waypoints or {}).items():
+            if not isinstance(wp, dict) or k.startswith('_'):
+                continue
+            for key in ('SellCommodities', 'BuyCommodities'):
+                for n in (wp.get(key) or {}):
+                    if n.upper() == 'ALL' and key == 'SellCommodities':
+                        return None
+                    names.add(_re.sub(r'[^a-z0-9]', '', n.lower()))
+        return names
+
+    def _dump_foreign_cargo(self, ap):
+        """ Sells cargo that no waypoint of the route sells, if this station buys it. """
+        import re as _re
+        if not ap.config.get('TradeDumpForeignCargo', True):
+            return
+        route = self._route_commodities()
+        if route is None:
+            return
+        from EDTradeFinder import display_name
+        self.cargo_parser.get_cargo_data()
+        foreign = []
+        for it in self.cargo_parser.get_items() or []:
+            sym = it.get('Name') or ''
+            name = it.get('Name_Localised') or display_name(sym)
+            cnt = int(it.get('Count') or 0) - int(it.get('Stolen') or 0)
+            if cnt > 0 and _re.sub(r'[^a-z0-9]', '', name.lower()) not in route and \
+                    _re.sub(r'[^a-z0-9]', '', sym.lower()) not in route:
+                foreign.append((name, cnt))
+        if not foreign:
+            return
+        self.market_parser.get_market_data()
+        sellable = [(n, c) for n, c in foreign if self.market_parser.can_sell_item(n)]
+        not_here = [f"{c} t {n}" for n, c in foreign if (n, c) not in sellable]
+        if not_here:
+            self.ap_ckb('log', "Cargo the route does not sell, not bought here: " + ", ".join(not_here) + ".")
+        if not sellable:
+            return
+        self.ap_ckb('log+vce', "Selling cargo the route does not use: " + ", ".join(f"{c} t {n}" for n, c in sellable))
+        mkt = self.ap.stn_svcs_in_ship.commodities_market
+        mkt.select_sell(ap.keys)
+        for n, c in sellable:
+            ts = self.cargo_parser.current_data['timestamp']
+            result, qty = mkt.sell_commodity(ap.keys, n, 9999, self.cargo_parser)
+            if qty > 0:
+                self.cargo_parser.wait_for_file_change(ts, 5)
+                self.cargo_parser.get_cargo_data()
+        sleep(1)
+
     def execute_trade(self, ap, dest_key):
         # Get trade commodities from waypoint
         sell_commodities = self.waypoints[dest_key]['SellCommodities']
@@ -475,6 +527,15 @@ class EDWayPoint:
                 self.write_waypoints(data=None, filename='./waypoints/' + Path(self.filename).name)
 
             sleep(1)
+
+            # Cargo the route never sells (left over from another route, presell failed): sell it here if this
+            # station buys it. On 2026-10-30 752 t Resonating Separators blocked the hold for 1.5 hours.
+            try:
+                self._dump_foreign_cargo(ap)
+            except Exception as e:
+                if type(e).__name__ in ('EDAP_Interrupt', 'EDAP_GameNotRunning'):
+                    raise
+                logger.warning(f"selling foreign cargo failed: {e}")
 
             # --------- BUY ----------
             # Supply of the planned commodity gone or prices changed: fill the hold with the best ones now
@@ -861,8 +922,27 @@ class EDWayPoint:
             if docked_at_stn:  # and (next_wp_station != "" or sys_bookmark):
                 # Docked - let do trade
                 self.ap_ckb('log+vce', f"Execute trade at Station: {next_wp_station}")
+                earn = getattr(self.ap, 'earnings', None)
+                ev0 = getattr(earn, 'trade_events', 0)
                 self.execute_trade(self.ap, dest_key)
                 self._replot_after_trade = True  # cargo mass changed -> jump range changed
+                # Nothing sold and nothing bought at two trade stations in a row: the route is blocked (hold full
+                # of cargo nobody on the route buys, 2026-10-30 12:39-14:19) -> fail-safe
+                wp_trades = (self.waypoints[dest_key].get('SellCommodities') or
+                             self.waypoints[dest_key].get('BuyCommodities'))
+                if wp_trades and earn is not None:
+                    sleep(1.5)
+                    self.ap.jn.ship_state()  # parse the journal (MarketSell/MarketBuy)
+                    if getattr(earn, 'trade_events', 0) == ev0:
+                        self._idle_trades = getattr(self, '_idle_trades', 0) + 1
+                        self.ap_ckb('log', f"Nothing sold or bought at {next_wp_station} ({self._idle_trades}).")
+                    else:
+                        self._idle_trades = 0
+                    if self._idle_trades >= 2 and never_stop:
+                        self._idle_trades = 0
+                        self.abort_reason = "no trade possible (nothing sold or bought at 2 stations)"
+                        _abort = True
+                        break
                 if getattr(self, '_trade_failed', False):
                     # Do not fly the whole route with an empty hold
                     self.ap_ckb('log+vce', "Trade failed (purchase not confirmed)." +

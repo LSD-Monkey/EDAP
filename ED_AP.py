@@ -101,6 +101,16 @@ class SCAssistResult(Enum):
 _SCA_DIST_RE = re.compile(r'(\d+(?:[.,]\d+)?)\s*(LS|LY|KM|MM|AU|M)(?![A-Z])')
 
 
+def sca_distance_ls(dist: str | None) -> float | None:
+    """ '32.3LS' / '5.2MM' / '820KM' / '1.2AU' -> light seconds. """
+    m = re.match(r'([\d.]+)(LS|LY|KM|MM|AU|M)$', dist or '')
+    if not m:
+        return None
+    v = float(m.group(1))
+    return {'LS': v, 'MM': v / 299.792, 'KM': v / 299792.0, 'M': v / 299792458.0, 'AU': v * 499.005,
+            'LY': v * 31557600.0}[m.group(2)]
+
+
 def parse_sca_distance(text: str) -> str | None:
     """ Distance to the target as shown under the destination name on the HUD, e.g.
     'MACGREGOR ORBITAL 76.8Ls 8.9d' -> '76.8LS'. Returned as normalised text (value + unit), only used to see if it
@@ -459,6 +469,8 @@ class EDAutopilot:
             "TradeCarrierMaxAgeHours": 6,
             "PlanetMinAltitude": 3000,  # m: below this and sinking -> throttle 0 and pitch up away from the planet
             "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
+            "SCAssistApproachTime": 180,  # s without getting closer to the target (circling) -> re-activate the SCA
+            "TradeDumpForeignCargo": True,  # trade: sell cargo the route does not sell where it is bought
             "TradeAdaptCommodity": True,  # trade: refill the hold with the best commodities if the planned one is short
             "TradeMinProfitPerTon": 1000,  # trade: commodities with less profit per ton are not bought when adapting
             "RespawnAllowFreeShip": False,  # respawn: never take the free Sidewinder (own ship lost), stop instead
@@ -585,7 +597,8 @@ class EDAutopilot:
                          ('TradePreSellMinTons', 100), ('TradeCarrierMaxAgeHours', 6),
                          ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('RespawnAllowFreeShip', False), ('TradeAdaptCommodity', True),
                          ('TradeMinProfitPerTon', 1000), ('PlanetMinAltitude', 3000),
-                         ('JumpBlockedEscapeTime', 20)):
+                         ('JumpBlockedEscapeTime', 20), ('SCAssistApproachTime', 180),
+                         ('TradeDumpForeignCargo', True)):
                 cnf.setdefault(k, v)
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
@@ -3439,6 +3452,7 @@ class EDAutopilot:
             return False
         self.jn.ship_state()['interdicted'] = False
 
+        self._sca_circle_cnt = 0
         max_activations = max(1, int(self.config.get('SCAssistMaxActivations', 5)))
         for activation in range(1, max_activations + 1):
             res = self._sc_assist_ingame_engage(scr_reg, target)
@@ -3571,6 +3585,7 @@ class EDAutopilot:
         last_dist = None
         last_progress = time.time()
         stall_cnt = 0
+        best_ls, t_best = None, time.time()
         last_star_time = time.time()
         star_cnt = 0
 
@@ -3657,6 +3672,9 @@ class EDAutopilot:
                         stall_cnt = 0
                     last_dist = dist
                     last_progress = time.time()
+                ls = sca_distance_ls(dist)
+                if ls is not None and (best_ls is None or ls < best_ls * 0.9):
+                    best_ls, t_best = ls, time.time()
                 if no_los is None:
                     check_los = False  # Not supported (no locale text)
                 elif no_los:
@@ -3704,6 +3722,21 @@ class EDAutopilot:
                             self.ap_ckb('log', "Could not confirm 'SUPERCRUISE ASSIST ACTIVE' via OCR. Check the "
                                                "'sca_active' region calibration. Continuing without the check.")
                             check_ocr = False
+
+            # Approach watchdog: the distance changes, but never gets smaller - the ship circles around the target
+            # (2026-10-30 11:17-12:22: 32 -> 22 -> 5.6 -> 29 -> 48 Ls ... for 65 minutes, the stall watchdog
+            # was reset by every change). No new minimum for 'SCAssistApproachTime' (180 s) -> activate the SCA
+            # again; the 3rd time give up (fail-safe).
+            approach_time = float(self.config.get('SCAssistApproachTime', 180))
+            if (approach_time > 0 and in_sc and not near and best_ls is not None and
+                    time.time() - t_best > approach_time):
+                self._sca_circle_cnt = getattr(self, '_sca_circle_cnt', 0) + 1
+                self.ap_ckb('log+vce', f"Supercruise Assist does not get closer to the target (best {best_ls:.1f} Ls, "
+                                       f"now {last_dist}) for {approach_time:.0f} s ({self._sca_circle_cnt}).")
+                if self._sca_circle_cnt >= 3:
+                    return SCAssistResult.Failed
+                self.set_throttle_0()
+                return SCAssistResult.Reengage
 
             # Progress watchdog: distance to the target did not change -> the ship does not move
             if (stall_time > 0 and in_sc and not near and last_dist is not None and

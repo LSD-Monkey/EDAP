@@ -72,6 +72,7 @@ class WaypointRecovery:
     def reset(self):
         self.stage_jumps = 0
         self.waited = False
+        self._no_trade_cnt = 0
 
     def _check_progress(self):
         p = getattr(self.ap.waypoint, 'progress_cnt', 0)
@@ -99,6 +100,25 @@ class WaypointRecovery:
                 reason = 'refuel stop failed'
             else:
                 return
+
+        # Route blocked (nothing sold or bought at 2 stations, e.g. hold full of cargo the route does not use):
+        # sell the cargo at the best station nearby, then the route continues; the 2nd time another route
+        if reason.startswith('no trade'):
+            self._no_trade_cnt = getattr(self, '_no_trade_cnt', 0) + 1
+            if self._no_trade_cnt == 1:
+                self.log("Fail-safe: no trade possible on this route. Selling the cargo at a station nearby first.",
+                         True)
+                before = int(self.ap.status.get_cleaned_data().get('Cargo') or 0)
+                presell_cargo(self.ap)
+                after = int(self.ap.status.get_cleaned_data().get('Cargo') or 0)
+                if after < before:
+                    return
+            if self._cfg('WaypointRecoveryNewRoute', True):
+                self.log("Fail-safe: no trade possible on this route. Searching another trade route.", True)
+                if self.start_new_route():
+                    self._no_trade_cnt = 0
+                    self.reset()
+                    return
 
         # Docking refused for good (carrier with restricted docking access, too large, hostile): jumping out and
         # back or waiting does not help, take another route at once.
@@ -856,7 +876,9 @@ def presell_cargo(ap) -> bool:
 
 def _presell_cargo(ap) -> bool:
     from CargoParser import CargoParser
-    from EDTradeFinder import ArdentClient, TradeFinder, display_name, _norm
+    from EDTradeFinder import ArdentClient, TradeFinder, display_name, _norm, LARGE_PAD_TYPES
+    ORBITAL_TYPES = set(LARGE_PAD_TYPES) | {'outpost', 'coriolisstarport', 'orbisstarport', 'ocellusstarport'}
+    ORBITAL_TYPES -= {'craterport'}
 
     cfg = ap.config
     min_tons = int(cfg.get('TradePreSellMinTons', 100) or 0)
@@ -921,6 +943,12 @@ def _presell_cargo(ap) -> bool:
             price = int(r.get('sellPrice') or 0)
             if price <= 0 or finder.station_reject_reason(r, filt):
                 continue
+            # Only stations of a known orbital type (unless planetary ports are allowed): 'Deluc Settlement' passed
+            # the filters and was not in the Nav Panel list (2026-10-30 12:35)
+            stype = _norm(r.get('stationType') or '')
+            if not filt['planetary'] and (stype not in ORBITAL_TYPES or 'settlement' in
+                                          (r.get('stationName') or '').lower()):
+                continue
             key = f"{r.get('systemName')}|{r.get('stationName')}"
             st = stations.setdefault(key, {'system': r.get('systemName'), 'station': r.get('stationName'),
                                            'distance': float(r.get('distance') or 0),
@@ -933,26 +961,34 @@ def _presell_cargo(ap) -> bool:
         ap.ap_ckb('log+vce', "No station nearby buys the cargo. Starting the route.")
         return False
     best_rev = max(s['revenue'] for s in stations.values())
-    good = [s for s in stations.values() if s['revenue'] >= 0.97 * best_rev]
-    best = min(good, key=lambda s: (s['distance'], s['arrival_ls']))
-    prices = ", ".join(f"{n} {p:,} cr" for n, p in best['sells'].items())
-    ap.ap_ckb('log+vce', f"Selling at {best['station']} in {best['system']} ({best['distance']:.1f} ly, "
-                         f"{best['arrival_ls']:.0f} Ls): {prices}, about {best['revenue'] / 1e6:.1f} M cr.")
-
-    # Fly there (unless docked at that station already)
+    # Order: within 3% of the best revenue the closest first, then by revenue. Up to 3 stations are tried.
+    order = sorted(stations.values(), key=lambda s: (s['revenue'] < 0.97 * best_rev,
+                                                     s['distance'] if s['revenue'] >= 0.97 * best_rev else 0,
+                                                     -s['revenue']))
     from EDAP_data import FlagsDocked
-    state = ap.jn.ship_state()
-    here = (ap.status.get_flag(FlagsDocked) and (state.get('cur_station') or '').upper() == best['station'].upper()
-            and (state.get('cur_star_system') or '').upper() == best['system'].upper())
-    if not here:
-        if best['system'].upper() != cur.upper() and not rec._plot_and_jump(best['system']):
-            ap.ap_ckb('log+vce', f"Could not reach {best['system']} to sell the cargo. Starting the route.")
-            return False
-        ap.supercruise_to_station(ap.scrReg, best['station'])
+    best = None
+    for cand in order[:3]:
+        prices = ", ".join(f"{n} {p:,} cr" for n, p in cand['sells'].items())
+        ap.ap_ckb('log+vce', f"Selling at {cand['station']} in {cand['system']} ({cand['distance']:.1f} ly, "
+                             f"{cand['arrival_ls']:.0f} Ls): {prices}, about {cand['revenue'] / 1e6:.1f} M cr.")
+        state = ap.jn.ship_state()
+        if (ap.status.get_flag(FlagsDocked) and (state.get('cur_station') or '').upper() == cand['station'].upper()
+                and (state.get('cur_star_system') or '').upper() == cand['system'].upper()):
+            best = cand
+            break
+        cur_now = (state.get('cur_star_system') or '').upper()
+        if cand['system'].upper() != cur_now and not rec._plot_and_jump(cand['system']):
+            ap.ap_ckb('log+vce', f"Could not reach {cand['system']} to sell the cargo.")
+            continue
+        ap.supercruise_to_station(ap.scrReg, cand['station'])
         sleep(2)
-        if not ap.status.get_flag(FlagsDocked):
-            ap.ap_ckb('log+vce', f"Not docked at {best['station']}, cargo not sold. Starting the route.")
-            return False
+        if ap.status.get_flag(FlagsDocked):
+            best = cand
+            break
+        ap.ap_ckb('log+vce', f"Not docked at {cand['station']}, trying the next station.")
+    if best is None:
+        ap.ap_ckb('log+vce', "Cargo not sold. Starting the route (it is sold on the way where possible).")
+        return False
 
     # Sell with the normal trade code (temporary waypoint)
     wp = ap.waypoint

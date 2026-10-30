@@ -37,6 +37,7 @@ class EarningsTracker:
         self.session_sales = 0  # number of sales
         self.session_tons = 0
         self.last_trade = ''  # e.g. '+12.3 M cr: 752 t Gold'
+        self.trade_events = 0  # every MarketBuy/MarketSell (also manual ones), for the 'no trade' detection
         self.total = {'profit': 0, 'costs': 0, 'sales': 0, 'tons': 0, 'last_ts': 0.0, 'since': ''}
         self._load()
 
@@ -70,6 +71,8 @@ class EarningsTracker:
         with self.lock:
             if ts is None or ts <= float(self.total.get('last_ts') or 0):
                 return  # already counted / before EDAP started
+            if name in ('MarketBuy', 'MarketSell'):
+                self.trade_events += 1
             try:
                 if not self.active_cb():
                     self.total['last_ts'] = ts
