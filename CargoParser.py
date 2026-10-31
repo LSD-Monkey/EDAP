@@ -23,6 +23,7 @@ class CargoParser:
             self.file_path = file_path if file_path else (get_path(FOLDERID.SavedGames, UserHandle.current)
                                                           + "/Frontier Developments/Elite Dangerous/Cargo.json")
         self.last_mod_time = None
+        self.current_data = None
 
         # Read json file data
         self.current_data = self.get_cargo_data()
@@ -77,9 +78,111 @@ class CargoParser:
         { "timestamp":"2025-04-20T23:23:25Z", "event":"Cargo", "Vessel":"Ship", "Count":0, "Inventory":[
 
          ] }
+        The game does not always update Cargo.json: after a rebuy (2026-10-31 11:40) it kept 'Count 0' while 752 t
+        Aluminium were bought, EDAP then reported 'Unable to sell Aluminium. None in cargo hold.' and flew the full
+        hold around. If the cargo in Status.json does not match Cargo.json, the inventory is rebuilt from the journal.
         """
+        data = self._read_cargo_file()
+        fixed = self._check_against_status(data)
+        if fixed is not None:
+            self.current_data = fixed
+            return fixed
+        return data
+
+    def _status_cargo(self) -> int | None:
+        try:
+            with open(os.path.join(os.path.dirname(self.file_path), 'Status.json'), 'r', encoding='utf-8') as f:
+                st = json.load(f)
+            return int(st['Cargo']) if st.get('Cargo') is not None else None
+        except Exception:
+            return None
+
+    def _check_against_status(self, data):
+        """ Returns rebuilt cargo data if Cargo.json is stale, else None. """
+        try:
+            inv_total = sum(int(i.get('Count') or 0) for i in (data or {}).get('Inventory', []))
+        except Exception:
+            return None
+        status_cargo = self._status_cargo()
+        if status_cargo is None or status_cargo == inv_total:
+            return None
+        rebuilt = self._inventory_from_journal()
+        if rebuilt is None:
+            return None
+        total = sum(i['Count'] for i in rebuilt)
+        if total != status_cargo:
+            logger.debug(f"Cargo.json ({inv_total} t) does not match Status.json ({status_cargo} t), journal "
+                         f"gives {total} t - not used.")
+            return None
+        if not getattr(self, '_stale_logged', False) or self._stale_logged != (inv_total, total):
+            self._stale_logged = (inv_total, total)
+            logger.warning(f"Cargo.json is stale ({inv_total} t, Status.json {status_cargo} t). Inventory from the "
+                           f"journal: " + ", ".join(f"{i['Count']} t {i.get('Name_Localised') or i['Name']}"
+                                                    for i in rebuilt))
+        return {'timestamp': (data or {}).get('timestamp', ''), 'event': 'Cargo', 'Vessel': 'Ship',
+                'Count': total, 'Inventory': rebuilt, '_from_journal': True}
+
+    def _inventory_from_journal(self) -> list | None:
+        """ Last full 'Cargo' inventory of the ship in the newest journal plus the changes after it. """
+        jdir = os.path.dirname(self.file_path)
+        try:
+            files = sorted((os.path.join(jdir, f) for f in os.listdir(jdir)
+                            if f.startswith('Journal.') and f.endswith('.log')), key=os.path.getmtime)
+        except Exception:
+            return None
+        if not files:
+            return None
+        try:
+            with open(files[-1], 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+        except Exception:
+            return None
+        inv: dict[str, dict] = {}
+        have_base = False
+        for line in lines:
+            if '"event"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            e = ev.get('event')
+            if e == 'Cargo' and ev.get('Vessel', 'Ship') == 'Ship' and 'Inventory' in ev:
+                inv = {}
+                for it in ev['Inventory']:
+                    inv[it['Name'].lower()] = {'Name': it['Name'].lower(), 'Name_Localised': it.get('Name_Localised'),
+                                               'Count': int(it.get('Count') or 0), 'Stolen': int(it.get('Stolen') or 0)}
+                have_base = True
+            elif e in ('MarketBuy', 'MarketSell', 'EjectCargo', 'CollectCargo', 'MiningRefined', 'CargoDepot',
+                       'MissionCompleted', 'Died', 'Resurrect'):
+                if e in ('Died', 'Resurrect'):
+                    inv = {}
+                    have_base = True
+                    continue
+                if e in ('CargoDepot', 'MissionCompleted'):
+                    continue  # rare for the trade routes, a following 'Cargo' inventory corrects it
+                sym = str(ev.get('Type') or '').lower()
+                if not sym:
+                    continue
+                it = inv.setdefault(sym, {'Name': sym, 'Name_Localised': ev.get('Type_Localised'), 'Count': 0,
+                                          'Stolen': 0})
+                if ev.get('Type_Localised'):
+                    it['Name_Localised'] = ev['Type_Localised']
+                n = int(ev.get('Count') or (1 if e == 'MiningRefined' else 0))
+                it['Count'] += n if e in ('MarketBuy', 'CollectCargo', 'MiningRefined') else -n
+        if not have_base:
+            return None
+        out = []
+        for it in inv.values():
+            if it['Count'] > 0:
+                if not it.get('Name_Localised'):
+                    it.pop('Name_Localised', None)
+                out.append(it)
+        return out
+
+    def _read_cargo_file(self):
         # Check if file changed
-        if self.get_file_modified_time() == self.last_mod_time:
+        if self.get_file_modified_time() == self.last_mod_time and not (self.current_data or {}).get('_from_journal'):
             #logger.debug(f'Cargo.json mod timestamp {self.last_mod_time} unchanged.')
             return self.current_data
 

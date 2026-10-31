@@ -1,3 +1,13 @@
+# 10/31/2026 v1.9.4 b48 - stale Cargo.json
+Journal 2026-10-31: after the rebuy at 11:40 the game wrote no 'Cargo' event and did not update Cargo.json after
+buying 752 t Aluminium (Cargo.json: Count 0, Status.json: Cargo 752). EDAP reads the hold from Cargo.json:
+'Unable to sell Aluminium. None in cargo hold.' at Jameson Memorial, then 'Free cargo space: 0', the fail-safe
+switched to another route which could not sell Aluminium either.
+- FIX CargoParser compares Cargo.json with the cargo in Status.json. If they differ, the inventory is rebuilt from
+  the journal (last full 'Cargo' inventory, then MarketBuy/MarketSell/EjectCargo/CollectCargo/MiningRefined,
+  emptied by Died/Resurrect) and used if it matches Status.json (warning 'Cargo.json is stale' in the log). Used by
+  selling, 'sell the cargo first', the foreign cargo check and the market test.
+
 # 10/30/2026 v1.9.4 b47 - blocked hold, circling around the station
 Log 2026-10-30: 20 sales until 12:31, then nothing. A new route (Nelson Dock <-> Duncan's Den) was started with
 752 t Resonating Separators on board. 'Sell the cargo first' chose 'Deluc Settlement', which was not in the Nav
