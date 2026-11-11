@@ -94,6 +94,12 @@ class WaypointRecovery:
             self.wait_for_game()
             return
 
+        if reason == 'repair':
+            self.ap._last_repair_stop = time.time()  # not again within 30 min (station without repair)
+            if self.refuel_stop('repair'):
+                return
+            reason = 'repair stop failed'
+
         if reason == 'low_fuel':
             if not self.refuel_stop():
                 # No station found / not reachable: treat like any other failure
@@ -557,6 +563,14 @@ class WaypointRecovery:
         self.log("Reconnect: game loaded, but the ship state is not back yet.")
         return ap.game_is_playable()
 
+    def pirate_escape(self):
+        """ The same pirate interdicts again and again (14x every ~80 s on 2026-11-09, 9x on 11-11): leave the
+        system by hyperspace (an NPC can not follow), the route then flies back. """
+        self.log("Fail-safe: repeated interdictions, jumping to a neighbour system to lose the pursuer.", True)
+        self.ap.update_ap_status("Escape: leaving the system")
+        if not self.jump_out():
+            self.log("Escape jump failed, continuing the route.")
+
     def wait_minutes(self, minutes: float):
         """ Waits with throttle 0; reacts on interdictions. """
         try:
@@ -692,17 +706,21 @@ class WaypointRecovery:
         return {'S': 1, 'M': 2, 'L': 3}.get((self._state().get('ship_size') or 'L').upper(), 3)
 
     # ------------------------------------------------------------------------------------------------------------
-    def refuel_stop(self) -> bool:
-        """ Flies to the nearest station with a fitting pad and docks there (refuel + repair on docking). """
+    def refuel_stop(self, purpose: str = 'fuel') -> bool:
+        """ Flies to the nearest station with a fitting pad and docks there (refuel + repair on docking).
+        purpose 'repair': the same stop because the hull is damaged. """
         ap = self.ap
         pct = self._state().get('fuel_percent')
         st = self.find_refuel_station()
+        what = "Repair" if purpose == 'repair' else "Fuel"
         if not st:
-            self.log("Low fuel: no station for a fuel stop found.", True)
+            self.log(f"{what} stop: no station found.", True)
             return False
-        self.log(f"Low fuel ({pct}%). Fuel stop at {st['station']} in {st['system']} "
+        why = (f"Hull {100 * float(self._state().get('hull_health') or 0):.0f}%" if purpose == 'repair'
+               else f"Low fuel ({pct}%)")
+        self.log(f"{why}. {what} stop at {st['station']} in {st['system']} "
                  f"({st['distance']:.1f} ly, {st['arrival_ls']:.0f} Ls).", True)
-        ap.update_ap_status(f"Fuel stop: {st['station']}")
+        ap.update_ap_status(f"{what} stop: {st['station']}")
         cur = (self._state().get('cur_star_system') or '').upper()
         if st['system'].upper() != cur:
             if not self._plot_and_jump(st['system']):
@@ -808,9 +826,9 @@ class WaypointRecovery:
         params = dict(ref_system=cur, cargo=cargo,
                       max_start_distance=float(cfg.get('TradeSearchRadius', 50)),
                       max_hop_distance=float(cfg.get('TradeMaxHopDistance', 50)),
-                      min_volume=int(cfg.get('TradeMinVolume', 0)),
+                      min_volume=int(cfg.get('TradeMinVolume', 10000)),
                       max_arrival_ls=float(cfg.get('TradeMaxArrivalLs', 5000)),
-                      max_age_hours=float(cfg.get('TradeMaxAgeHours', 24)),
+                      max_age_hours=float(cfg.get('TradeMaxAgeHours', 5)),
                       min_pad=self._need_pad(),
                       carriers=bool(cfg.get('TradeIncludeCarriers', False)),
                       megaships=bool(cfg.get('TradeIncludeMegaships', False)),
@@ -922,7 +940,7 @@ def _presell_cargo(ap) -> bool:
                 planetary=bool(cfg.get('TradeIncludePlanetary', False)),
                 settlements=bool(cfg.get('TradeIncludeSettlements', False)),
                 min_pad=rec._need_pad(), max_arrival_ls=float(cfg.get('TradeMaxArrivalLs', 5000)),
-                max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 24))),
+                max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 5))),
                 carrier_max_age_hours=float(cfg.get('TradeCarrierMaxAgeHours', 6)))
     radius = min(200.0, float(cfg.get('TradeSearchRadius', 50)))
     client = ArdentClient()

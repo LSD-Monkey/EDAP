@@ -64,6 +64,18 @@ SETTINGS: list[dict] = [
                           "wait until the game is playable again."),
     dict(section="Waypoint Assist", key="ReconnectMode", label="Fail-safe: game mode for reconnect", type="choice",
          choices=["Solo", "Open"], tip="Game mode chosen when reconnecting."),
+    dict(section="Waypoint Assist", key="InterdictionEscapeSystem", label="Interdicted again: leave the system",
+         type="bool", tip="A 2nd interdiction within 'Interdictions count as repeated': after submitting, EDAP jumps "
+                          "to a neighbour system by hyperspace (an NPC pirate can not follow) and then flies the "
+                          "route back."),
+    dict(section="Waypoint Assist", key="InterdictionRepeatMinutes", label="Interdictions count as repeated (min)",
+         type="int", min=1, max=60, tip="Two interdictions within this time trigger the escape to another system."),
+    dict(section="Waypoint Assist", key="RepairStopHull", label="Repair stop below hull (%)", type="int",
+         min=0, max=95, tip="Hull below this in flight: dock at the nearest station for repairs before flying on. "
+                            "0 = off."),
+    dict(section="Waypoint Assist", key="DockFirstRequestDelay", label="First docking request after (s)",
+         type="int", min=0, max=30, tip="Seconds of approach after the drop before the first docking request "
+                                        "(fewer 'too far away' denials)."),
     dict(section="Waypoint Assist", key="RespawnAllowFreeShip", label="Respawn: allow the free Sidewinder",
          type="bool", tip="Off (recommended): after the ship was destroyed EDAP always rebuys your own ship. If no "
                           "rebuy is offered it waits; if it ever lands in a free ship, Waypoint Assist stops. "

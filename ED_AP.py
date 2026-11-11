@@ -64,6 +64,14 @@ class EDAP_Interrupt(Exception):
     pass
 
 
+class EDAP_Interdicted(EDAP_Interrupt):
+    """ Raised in the engine thread by the interdiction watch when the ship is being interdicted while EDAP does
+    something else (Nav Panel, Galaxy Map, alignment ...). A subclass of EDAP_Interrupt so that the many
+    'except EDAP_Interrupt: raise' pass it on; Waypoint Assist catches it first and continues the route after the
+    interdiction was handled (it is not a STOP). """
+    pass
+
+
 class EDAP_GameNotRunning(EDAP_Interrupt):
     """ Raised when the game lost the connection to the server, is in the main menu or was closed.
     Derived from EDAP_Interrupt: every assist stops like on a user stop (no auto-restart, no key presses). """
@@ -319,6 +327,10 @@ class EDAutopilot:
             self._game_watchdog_thread = threading.Thread(target=self._game_watchdog_loop, daemon=True,
                                                           name="EDAP game watchdog")
             self._game_watchdog_thread.start()
+            # Reacts on an interdiction at once, whatever EDAP is doing (Nav Panel, Galaxy Map, ...)
+            self._interdiction_watch_thread = threading.Thread(target=self._interdiction_watch_loop, daemon=True,
+                                                               name="EDAP interdiction watch")
+            self._interdiction_watch_thread.start()
 
         # Start thread to delete old log files.
         del_log_files_thread = threading.Thread(target=delete_old_log_files, daemon=True)
@@ -471,6 +483,10 @@ class EDAutopilot:
             "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
             "SCAssistApproachTime": 180,  # s without getting closer to the target (circling) -> re-activate the SCA
             "TradeDumpForeignCargo": True,  # trade: sell cargo the route does not sell where it is bought
+            "InterdictionEscapeSystem": True,  # 2nd interdiction in a short time: leave the system by hyperspace
+            "InterdictionRepeatMinutes": 8,  # interdictions within this time count as 'repeated'
+            "RepairStopHull": 60,  # %: hull below this in flight -> dock at the nearest station for repairs
+            "DockFirstRequestDelay": 8,  # s after the drop before the first docking request (fewer 'too far' denials)
             "TradeAdaptCommodity": True,  # trade: refill the hold with the best commodities if the planned one is short
             "TradeMinProfitPerTon": 1000,  # trade: commodities with less profit per ton are not bought when adapting
             "RespawnAllowFreeShip": False,  # respawn: never take the free Sidewinder (own ship lost), stop instead
@@ -489,8 +505,8 @@ class EDAutopilot:
             "TradeSearchRadius": 50,  # Trade tab: max. distance from the reference system to the start station
             "TradeMaxHopDistance": 50,  # Trade tab: max. distance between the two stations in ly
             "TradeMaxArrivalLs": 5000,  # Trade tab: max. distance of a station from the arrival star
-            "TradeMaxAgeHours": 24,  # Trade tab: ignore market data older than this
-            "TradeMinVolume": 0,  # Trade tab: min. supply/demand (0 = cargo capacity)
+            "TradeMaxAgeHours": 5,  # Trade tab: ignore market data older than this (was 24)
+            "TradeMinVolume": 10000,  # Trade tab: min. supply/demand (0 = cargo capacity; was 0)
             "TradeCommodityCount": 80,  # Trade tab: number of commodities searched (most valuable first)
             "TradeIncludeCarriers": False,  # Trade tab: include fleet carriers
             "TradeIncludeMegaships": False,  # Trade tab: include megaships
@@ -598,8 +614,16 @@ class EDAutopilot:
                          ('AutoReconnect', True), ('ReconnectMode', 'Solo'), ('RespawnAllowFreeShip', False), ('TradeAdaptCommodity', True),
                          ('TradeMinProfitPerTon', 1000), ('PlanetMinAltitude', 3000),
                          ('JumpBlockedEscapeTime', 20), ('SCAssistApproachTime', 180),
-                         ('TradeDumpForeignCargo', True)):
+                         ('TradeDumpForeignCargo', True), ('InterdictionEscapeSystem', True),
+                         ('InterdictionRepeatMinutes', 8), ('RepairStopHull', 60), ('DockFirstRequestDelay', 8)):
                 cnf.setdefault(k, v)
+            # New trade search defaults (2026-11-11): saved configs with the old defaults get the new ones once
+            if not cnf.get('TradeDefaultsV2'):
+                if cnf.get('TradeMaxAgeHours', 24) == 24:
+                    cnf['TradeMaxAgeHours'] = 5
+                if cnf.get('TradeMinVolume', 0) == 0:
+                    cnf['TradeMinVolume'] = 10000
+                cnf['TradeDefaultsV2'] = True
             if 'SCStarAheadPercent' not in cnf:
                 cnf['SCStarAheadPercent'] = 12
             if 'SCEngageTimeout' not in cnf:
@@ -1048,39 +1072,122 @@ class EDAutopilot:
             return False
 
     def interdiction_check(self) -> bool:
-        """ Checks if we are being interdicted. This can occur in SC and maybe in system jump by Thargoids
-        (needs to be verified). Returns False if not interdicted, True after interdiction is detected and we
-        get away. Use return result to determine the next action (continue, or do something else).
-        """
-        # Return if we are not being interdicted.
+        """ Checks if we are being interdicted. Returns False if not, True after the interdiction was handled
+        (submitted, escaped back into supercruise). """
         if not self.status.get_flag(FlagsBeingInterdicted):
             return False
-
-        # Interdiction detected.
-        self.vce.say("Danger. Interdiction detected.")
-        self.ap_ckb('log', 'Interdiction detected.')
-
-        # Keep setting speed to zero to submit while in supercruise or system jump.
-        while self.status.get_flag(FlagsSupercruise) or self.status.get_flag2(Flags2FsdHyperdriveCharging):
-            self.set_throttle_0()  # Submit.
-            sleep(0.5)
-
-        # Set speed to 100%.
-        self.set_throttle_100()
-
-        # Wait for cooldown to start.
-        self.status.wait_for_flag_on(FlagsFsdCooldown)
-
-        # Boost while waiting for cooldown to complete.
-        while not self.status.wait_for_flag_off(FlagsFsdCooldown, timeout=1):
-            self.keys.send('UseBoostJuice')
-
-        # Ensure we are in supercruise
-        self.sc_engage(True)
-
-        # Update journal flag.
-        self.jn.ship_state()['interdicted'] = False  # reset flag
+        self.handle_interdiction()
         return True
+
+    def handle_interdiction(self):
+        """ Submit to the interdiction (throttle 0), then boost away and enter supercruise again.
+        Remembers the interdiction; a 2nd one within 'InterdictionRepeatMinutes' sets _pirate_escape_pending
+        (Waypoint Assist then leaves the system by hyperspace: the same NPC interdicted 14x / 9x in a row every
+        ~80 s on 2026-11-09 and 11-11, the ship died once). """
+        if getattr(self, '_handling_interdiction', False):
+            return
+        if not self.status.get_flag(FlagsBeingInterdicted) and self.status.get_flag(FlagsSupercruise):
+            return  # already handled (e.g. by the SC Assist monitor), back in supercruise
+        self._handling_interdiction = True
+        escape = False
+        try:
+            self.vce.say("Danger. Interdiction detected.")
+            self.ap_ckb('log', 'Interdiction detected.')
+            self._release_keys_safe()
+            # Close panels/maps first, the throttle keys do not work there
+            for _ in range(5):
+                try:
+                    if self.status.get_gui_focus() == GuiFocusNoFocus:
+                        break
+                except Exception:
+                    break
+                self.keys.send('UI_Back')
+                sleep(0.4)
+
+            # Submit: throttle 0 while still in supercruise / jump charging
+            t0 = time.time()
+            while (self.status.get_flag(FlagsSupercruise) or self.status.get_flag2(Flags2FsdHyperdriveCharging)) \
+                    and time.time() - t0 < 30:
+                self.set_throttle_0()
+                sleep(0.5)
+
+            # Remember who it was (journal 'Interdicted' comes with the drop)
+            sleep(1.0)
+            name = ''
+            try:
+                self.jn.ship_state()
+                name = self._last_interdictor()
+            except Exception:
+                pass
+            now = time.time()
+            self._last_interdiction_t = now
+            win = 60 * float(self.config.get('InterdictionRepeatMinutes', 8))
+            self._interdiction_log = [x for x in getattr(self, '_interdiction_log', []) if now - x[0] < win]
+            self._interdiction_log.append((now, name))
+            if len(self._interdiction_log) >= 2 and self.config.get('InterdictionEscapeSystem', True):
+                self._pirate_escape_pending = True
+                self.ap_ckb('log+vce', f"Interdicted {len(self._interdiction_log)}x within "
+                                       f"{win / 60:.0f} min" + (f" ({name})" if name else "") +
+                                       ". Leaving the system by hyperspace.")
+
+            # Escape: full throttle, boost during the cooldown, back into supercruise
+            self.set_throttle_100()
+            self.status.wait_for_flag_on(FlagsFsdCooldown, 5)
+            t0 = time.time()
+            while not self.status.wait_for_flag_off(FlagsFsdCooldown, timeout=1) and time.time() - t0 < 60:
+                self.keys.send('UseBoostJuice')
+            self.sc_engage(True)
+            self.jn.ship_state()['interdicted'] = False
+            escape = bool(getattr(self, '_pirate_escape_pending', False)) and self.waypoint_assist_enabled
+        finally:
+            self._handling_interdiction = False
+        if escape and not getattr(self, '_in_interdicted_handler', False):
+            # Leave the current action (SC Assist, jump ...): Waypoint Assist leaves the system by hyperspace
+            raise EDAP_Interdicted()
+
+    def _last_interdictor(self) -> str:
+        try:
+            path = self.jn.get_latest_log() or self.jn.current_log
+            with open(path, 'rb') as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 32768))
+                lines = f.read().decode('utf-8', errors='ignore').splitlines()
+            for line in reversed(lines):
+                if '"Interdicted"' in line:
+                    ev = json.loads(line)
+                    return ev.get('Interdictor_Localised') or ev.get('Interdictor') or ''
+        except Exception:
+            pass
+        return ''
+
+    def _interdiction_watch_loop(self):
+        """ Background thread: Status.json 'being interdicted' while Waypoint Assist does something that does not
+        check it (Nav Panel, Galaxy Map, docking request ...) -> EDAP_Interdicted in the engine thread. The first
+        interdiction on 2026-11-11 13:33 was only noticed after the Nav Panel search had failed. """
+        since = None
+        raised_at = 0.0
+        while not self.terminate:
+            try:
+                sleep(0.3)
+                if not self.waypoint_assist_enabled or getattr(self, '_handling_interdiction', False):
+                    since = None
+                    continue
+                flags, _ = self._status_flags_raw()
+                if flags is None or not (flags & FlagsBeingInterdicted):
+                    since = None
+                    continue
+                if since is None:
+                    since = time.time()
+                    continue
+                # 0.8 s: the SC Assist monitor and the jump loops check the flag themselves every 0.5 s
+                if time.time() - since > 0.8 and time.time() - raised_at > 20 and \
+                        not getattr(self, '_handling_interdiction', False):
+                    raised_at = time.time()
+                    logger.info("Interdiction watch: interrupting the current action.")
+                    if self.ap_thread is not None and self.ap_thread.is_alive():
+                        self.ctype_async_raise(self.ap_thread, EDAP_Interdicted)
+            except Exception as e:
+                logger.warning(f"interdiction watch: {e}")
 
     def get_nav_offset(self, scr_reg) -> CompassOffset | None:
         """ Determine the x,y offset from center of the compass of the nav point.
@@ -1762,6 +1869,14 @@ class EDAutopilot:
         t_drop = time.time()
         approach = float(self.config.get('DockApproachTime', 20))
         self.ap_ckb('log+vce', "Initiating Docking Procedure")
+        # The drop is ~11 km out, docking is granted below 7.5 km: an immediate request was denied ('too far') at
+        # almost every station (30 denials per session). Approach a few seconds first.
+        first_delay = float(self.config.get('DockFirstRequestDelay', 8) or 0)
+        t_wait = time.time()
+        while time.time() - t_wait < first_delay:
+            if self.status.get_flag(FlagsBeingInterdicted):
+                break
+            sleep(0.5)
         self.request_docking()
         sleep(1.5)
 
@@ -3000,6 +3115,35 @@ class EDAutopilot:
         except Exception as e:
             logger.warning(f"escape jump blocked: realign failed: {e}")
 
+    def _climb_from_planet(self, max_secs: float = 30.0) -> bool:
+        """ Points the ship straight away from the planet (the escape vector near a planet) by maximising the rate
+        of climb: pitch up in short steps as long as the climb rate improves. Returns True when in supercruise. """
+        self.ap_ckb('log', "Near a planet: pointing away from it (escape vector) by the climb rate.")
+        self.set_throttle_100()
+
+        def rate(dt=1.0):
+            a0 = self._altitude()
+            sleep(dt)
+            a1 = self._altitude()
+            return None if a0 is None or a1 is None else (a1 - a0) / dt
+
+        prev = rate()
+        t0 = time.time()
+        while prev is not None and time.time() - t0 < max_secs and not self._in_sc_or_jumping():
+            self.keys.send('PitchUpButton', hold=0.6)
+            r = rate()
+            if r is None:
+                break
+            if r < prev:
+                self.keys.send('PitchDownButton', hold=0.3)  # just passed straight up
+                break
+            prev = r
+        for _ in range(20):
+            if self._in_sc_or_jumping():
+                return True
+            sleep(0.5)
+        return self._in_sc_or_jumping()
+
     def _altitude(self) -> float | None:
         """ Altitude above a planet surface in metres (Status.json, only near a planet), else None. """
         try:
@@ -3073,14 +3217,19 @@ class EDAutopilot:
                 if not aligned_once and time.time() - t0 > 10 and self.status.get_flag(FlagsFsdCharging):
                     # Charged but no jump: 'ALIGN WITH ESCAPE VECTOR' (close to a star, e.g. after an interdiction)
                     aligned_once = True
-                    self.ap_ckb('log', "FSD charged but supercruise not engaged: aligning with the compass "
-                                       "(escape vector?) at full throttle.")
-                    try:
-                        self.compass_align(self.scrReg)
-                    except EDAP_Interrupt:
-                        raise
-                    except Exception as e:
-                        logger.warning(f"press supercruise: compass align: {e}")
+                    if self._altitude() is not None:
+                        # Near a planet the escape vector points away from it: no compass needed (35 min of
+                        # 'FSD charging' at Duamta 1 on 2026-11-09, the compass was not found)
+                        self._climb_from_planet()
+                    else:
+                        self.ap_ckb('log', "FSD charged but supercruise not engaged: aligning with the compass "
+                                           "(escape vector?) at full throttle.")
+                        try:
+                            self.compass_align(self.scrReg)
+                        except EDAP_Interrupt:
+                            raise
+                        except Exception as e:
+                            logger.warning(f"press supercruise: compass align: {e}")
                     self.set_throttle_100()
                 if boost and not self.status.get_flag(FlagsFsdCharging):
                     self.keys.send('UseBoostJuice')
@@ -3518,8 +3667,12 @@ class EDAutopilot:
         # monitoring would do that), otherwise the FSD would be charged again in normal space.
         self.stop_sco_monitoring()
 
-        # 1. Stand still in supercruise
-        self.set_throttle_0()
+        # 1. Stand still in supercruise - but not right after an interdiction: standing still for the 15-30 s of
+        #    the Nav Panel made the ship an easy target, the pirate interdicted again (2026-11-11 13:35-13:46)
+        if time.time() - getattr(self, '_last_interdiction_t', 0.0) < 180:
+            self.set_throttle_50()
+        else:
+            self.set_throttle_0()
 
         # 2. Activate the in-game SCA
         self.update_ap_status("Activate SC Assist")
@@ -4130,6 +4283,25 @@ class EDAutopilot:
     # ------------------------------------------------------------------
     # Game connection / main menu detection
     # ------------------------------------------------------------------
+    def _on_interdicted_exception(self, recovery):
+        """ EDAP_Interdicted arrived in the engine thread: handle the interdiction, leave the system if it was
+        repeated, then Waypoint Assist continues the route. """
+        self.ap_ckb('log', "Interdiction: interrupted the current action.")
+        self._release_keys_safe()
+        self.stop_sco_monitoring()
+        self._in_interdicted_handler = True
+        try:
+            self.handle_interdiction()
+        finally:
+            self._in_interdicted_handler = False
+        self._after_interdiction(recovery)
+
+    def _after_interdiction(self, recovery):
+        if getattr(self, '_pirate_escape_pending', False) and recovery is not None:
+            self._pirate_escape_pending = False
+            self._interdiction_log = []
+            recovery.pirate_escape()
+
     def _any_assist_active(self) -> bool:
         return bool(self.fsd_assist_enabled or self.sc_assist_enabled or self.waypoint_assist_enabled or
                     self.robigo_assist_enabled or self.afk_combat_assist_enabled or self.dss_assist_enabled or
@@ -4365,11 +4537,14 @@ class EDAutopilot:
             last_restart = 0.0
             never_stop = bool(self.config.get('WaypointNeverStop', True))
             recovery = WaypointRecovery(self) if never_stop else None
+            wp_session_start = time.time()
             # Trade route started with other cargo on board (> 'TradePreSellMinTons'): sell it profitably first
             stopped = False
             try:
                 if self.waypoint.waypoints and int(self.config.get('TradePreSellMinTons', 100) or 0) > 0:
                     presell_cargo(self)
+            except EDAP_Interdicted:
+                self._on_interdicted_exception(recovery)
             except EDAP_Interrupt:
                 logger.debug("Caught stop exception while selling the cargo first")
                 self._release_keys_safe()
@@ -4382,6 +4557,17 @@ class EDAutopilot:
                     if not getattr(self.waypoint, 'aborted', False):
                         break  # route complete
                     failure = getattr(self.waypoint, 'abort_reason', '') or 'aborted'
+                except EDAP_Interdicted:
+                    try:
+                        self._on_interdicted_exception(recovery)
+                    except EDAP_Interrupt:
+                        self._release_keys_safe()
+                        break
+                    except Exception as e4:
+                        logger.exception("interdiction handling failed")
+                        failure = f"error: {e4}"
+                    if failure is None:
+                        continue
                 except EDAP_GameNotRunning:
                     logger.debug("Caught game not running exception")
                     self._release_keys_safe()
@@ -4440,6 +4626,12 @@ class EDAutopilot:
                     self._release_keys_safe()
                     self.stop_sco_monitoring()
                     recovery.handle_failure(failure)
+                except EDAP_Interdicted:
+                    try:
+                        self._on_interdicted_exception(recovery)
+                    except EDAP_Interrupt:
+                        self._release_keys_safe()
+                        break
                 except EDAP_GameNotRunning:
                     try:
                         recovery.wait_for_game()
@@ -4462,6 +4654,15 @@ class EDAutopilot:
 
             self.stop_sco_monitoring()
             self.waypoint_assist_enabled = False
+            # Session report (interdictions, drops, deaths, phases without progress) to measure improvements
+            try:
+                from EDSessionReport import session_report
+                jd = os.path.dirname(self.jn.current_log) if self.jn.current_log else None
+                if jd and time.time() - wp_session_start > 300:
+                    for line in session_report(jd, wp_session_start):
+                        self.ap_ckb('log', line)
+            except Exception as e:
+                logger.warning(f"session report: {e}")
             self.ap_ckb('waypoint_stop')
             self.update_overlay()
 

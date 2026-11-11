@@ -1,3 +1,28 @@
+# 11/11/2026 v1.9.4 b49 - interdictions, planets, damage, session report
+Journals 2026-11-01 to 11-11: the same NPC pirate interdicted 14x (11-09) and 9x (11-11) in a row every ~80 s. After
+submitting EDAP re-entered supercruise and stood still for 15-30 s at throttle 0 to activate the SC Assist in the
+Nav Panel - and was interdicted again. Interdictions during Nav Panel/Galaxy Map actions were only noticed after
+the action had failed. Two ships were lost after several hits. At Duamta 1 (11-09) the FSD charged for 35 minutes
+next to the planet ('Supercruise not engaged'), the escape vector was not found because the compass was not seen.
+Most 'drops at a planet' in the journal were interdiction drops (the journal names the nearest body).
+- NEW interdiction watch (background thread, Status.json every 0.3 s): an interdiction interrupts whatever EDAP does
+  (Nav Panel, Galaxy Map, alignment), closes panels/maps, submits, boosts away and re-enters supercruise; the route
+  then continues.
+- NEW 2nd interdiction within 'InterdictionRepeatMinutes' (8): jump to a neighbour system by hyperspace (the NPC can
+  not follow), then the route flies back ('InterdictionEscapeSystem').
+- After an interdiction the SC Assist is activated at 50% throttle instead of standing still.
+- NEW near a planet the escape vector is found without the compass: the ship pitches up as long as the climb rate
+  (altitude from Status.json) improves, i.e. straight away from the planet.
+- NEW repair stop: hull below 'RepairStopHull' (60%) in flight -> dock at the nearest station (repair on docking),
+  then continue (not again within 30 min). Hull from the journal (HullDamage, Loadout, RepairAll, Resurrect).
+- The first docking request is sent 'DockFirstRequestDelay' (8 s) after the drop (30 'too far away' denials per
+  session before).
+- NEW session report (EDSessionReport.py, also written to the log when Waypoint Assist stops): sales/profit,
+  interdictions (most by whom), unplanned drops at planets/stars, lowest hull, deaths, docking denials, phases
+  without progress > 15 min. 'python EDSessionReport.py 4' for the last 4 hours.
+- Trade search defaults: min. supply/demand 10000 (was cargo capacity), max. price age 5 h (was 24 h). Saved
+  configs with the old defaults get the new ones once.
+
 # 10/31/2026 v1.9.4 b48 - stale Cargo.json
 Journal 2026-10-31: after the rebuy at 11:40 the game wrote no 'Cargo' event and did not update Cargo.json after
 buying 752 t Aluminium (Cargo.json: Count 0, Status.json: Cargo 752). EDAP reads the hold from Cargo.json:

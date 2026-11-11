@@ -678,6 +678,18 @@ class EDWayPoint:
             if self.ap.config.get('GameConnectionCheck', True) and not self.ap.game_is_playable():
                 self.ap.stop_game_not_running("main menu, game closed or not in the ship")
 
+            # Damaged hull (pirates): dock for repairs before flying on (the ship died after several hits on
+            # 2026-11-04, 11-09 and 11-11)
+            hull = self.ap.jn.ship_state().get('hull_health')
+            repair_pct = float(self.ap.config.get('RepairStopHull', 60) or 0)
+            if (never_stop and hull is not None and repair_pct > 0 and hull * 100 < repair_pct and
+                    not self.ap.status.get_flag(FlagsDocked) and
+                    time.time() - getattr(self.ap, '_last_repair_stop', 0.0) > 1800):
+                self.ap_ckb('log+vce', f"Hull at {hull * 100:.0f}%, docking for repairs first.")
+                self.abort_reason = "repair"
+                _abort = True
+                break
+
             # Current location
             cur_star_system = self.ap.jn.ship_state()['cur_star_system'].upper()
             cur_station = self.ap.jn.ship_state()['cur_station'].upper()

@@ -466,10 +466,19 @@ class EDJournal:
             # Parse Loadout
             # When written: at startup, when loading from main menu, or when switching ships,
             # or after changing the ship in Outfitting, or when docking SRV back in mothership
+            elif log_event == 'HullDamage' and log.get('PlayerPilot', True) and not log.get('Fighter'):
+                self.ship['hull_health'] = float(log.get('Health', 1.0))
+
+            elif log_event in ('RepairAll', 'Resurrect') or (log_event == 'Repair' and (
+                    'hull' in str(log.get('Item', '')).lower() or 'all' in str(log.get('Items', '')).lower())):
+                self.ship['hull_health'] = 1.0
+
             elif log_event == 'Loadout':
                 self.ship['type'] = log['Ship'].lower()
                 self.ship['ship_size'] = get_ship_size(log['Ship'])
                 self.ship['cargo_capacity'] = log['CargoCapacity']
+                if log.get('HullHealth') is not None:
+                    self.ship['hull_health'] = float(log['HullHealth'])
                 self.ship['has_fuel_scoop'] = check_fuel_scoop(log['Modules'])
                 self.ship['has_adv_dock_comp'] = check_adv_docking_computer(log['Modules'])
                 self.ship['has_std_dock_comp'] = check_std_docking_computer(log['Modules'])

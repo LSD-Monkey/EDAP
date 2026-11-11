@@ -13,8 +13,8 @@ one directly with Waypoint Assist.
 | Station to station (ly) | Max. direct distance between the two stations. |
 | Max. from star (Ls) | Max. distance of a station from the arrival star (long supercruise costs time). |
 | Cargo (t) | Cargo capacity, used for the amount per trip. |
-| Min. supply/demand | Min. stock at the seller and demand at the buyer. 0 = your cargo capacity. |
-| Max. price age (h) | Ignore market data older than this. |
+| Min. supply/demand | Min. stock at the seller and demand at the buyer. Default 10000 (big markets refill, the route stays profitable for longer). 0 = your cargo capacity. |
+| Max. price age (h) | Ignore market data older than this. Default 5 h. |
 | Landing pad | Min. landing pad size. |
 | Jump range (ly) | Laden jump range, for the estimate of the jumps and the time. |
 | Commodities | Number of commodities searched, the most valuable first. More = slower, more results. |
