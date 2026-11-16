@@ -87,6 +87,7 @@ class ScTargetAlignReturn(Enum):
     Lost = 1
     Found = 2
     Disengage = 3
+    Planet = 4  # in supercruise inside the approach zone of a planet (the game drops the ship there)
 
 
 def _log_thread_exception(args):
@@ -492,6 +493,7 @@ class EDAutopilot:
             "TradeCarrierMaxAgeHours": 6,
             "PlanetMinAltitude": 3000,  # m: below this and sinking -> throttle 0 and pitch up away from the planet
             "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
+            "PlanetEscapeTime": 45,  # s max. to fly away from a planet in supercruise before aligning again
             "RefocusEliteAfter": 60,  # s Elite not the active window during an assist -> bring it to the front (0 = off)
             "SCAssistApproachTime": 180,  # s without getting closer to the target (circling) -> re-activate the SCA
             "TradeDumpForeignCargo": True,  # trade: sell cargo the route does not sell where it is bought
@@ -629,7 +631,7 @@ class EDAutopilot:
                          ('JumpBlockedEscapeTime', 20), ('SCAssistApproachTime', 180),
                          ('TradeDumpForeignCargo', True), ('InterdictionEscapeSystem', True),
                          ('InterdictionRepeatMinutes', 8), ('RepairStopHull', 60), ('DockFirstRequestDelay', 8),
-                         ('TradeDataSource', 'Spansh'), ('RefocusEliteAfter', 60)):
+                         ('TradeDataSource', 'Spansh'), ('RefocusEliteAfter', 60), ('PlanetEscapeTime', 45)):
                 cnf.setdefault(k, v)
             # New trade search defaults (2026-11-11): saved configs with the old defaults get the new ones once
             if not cnf.get('TradeDefaultsV2'):
@@ -2193,6 +2195,77 @@ class EDAutopilot:
             return True
         return False
 
+    def _near_planet_in_sc(self) -> str:
+        """ Name of the planet when the ship is in supercruise inside its approach zone (journal ApproachBody
+        until LeaveBody), '' otherwise. """
+        try:
+            if not self.status.get_flag(FlagsSupercruise):
+                return ''
+            return self.jn.ship_state().get('near_body') or ''
+        except Exception:
+            return ''
+
+    def _escape_planet_sc(self, body: str) -> bool:
+        """ In supercruise inside the approach zone of a planet while aligning for a jump (2026-11-16 13:19, Ostyat
+        A 2 right after undocking from Rucker Enterprise: the route target was behind the planet, the FSD did not
+        charge, EDAP kept aligning towards the target at 50% and was pulled out of supercruise at the planet).
+        Turn away from the planet - by the climb rate when the altimeter is on, else pitch up 90 deg - and fly off at
+        full throttle until the game reports LeaveBody ('PlanetEscapeTime' max.). Returns True when clear. """
+        self.ap_ckb('log+vce', f"Planet {body} ahead, turning away from it before the jump.")
+        self.update_ap_status(f"Escape: planet {body}")
+        self.set_throttle_0()
+        sleep(1.5)
+        alt0 = self._altitude()
+        if alt0 is not None:
+            # Altimeter on: pitch up step by step as long as the climb rate improves (straight away from the planet)
+            self.set_throttle_50()
+            prev = None
+            t0 = time.time()
+            while time.time() - t0 < 25 and self.status.get_flag(FlagsSupercruise):
+                self.keys.send('PitchUpButton', hold=0.7)
+                a0 = self._altitude()
+                sleep(1.0)
+                a1 = self._altitude()
+                if a0 is None or a1 is None:
+                    break
+                r = a1 - a0
+                if prev is not None and r < prev:
+                    break  # passed straight up
+                prev = r
+        else:
+            self.ship_control.pitch_up_down(90)
+        self.set_throttle_100()
+        max_t = float(self.config.get('PlanetEscapeTime', 45))
+        t0 = time.time()
+        while time.time() - t0 < max_t:
+            if not self.status.get_flag(FlagsSupercruise):
+                return False  # dropped anyway (or jumping): the caller re-enters supercruise
+            if self.interdiction_check():
+                return False
+            self.jn.ship_state()
+            if not self._near_planet_in_sc():
+                break
+            sleep(0.5)
+        self.set_throttle_50()
+        clear = not self._near_planet_in_sc()
+        self.ap_ckb('log', f"Planet {body}: " + ("clear, aligning to the target again." if clear else
+                                                 f"still close after {max_t:.0f} s, aligning anyway."))
+        return clear
+
+    def _dropped_while_aligning(self) -> bool:
+        """ Fell out of supercruise during the alignment (planet, star): back into supercruise. """
+        try:
+            if self.status.get_flag(FlagsSupercruise) or self._jump_started():
+                return False
+            if self.jn.ship_state()['status'] != 'in_space':
+                return False
+        except Exception:
+            return False
+        self.ap_ckb('log+vce', f"Dropped out of supercruise at {self.jn.ship_state().get('body') or '?'} while "
+                               f"aligning, entering supercruise again.")
+        self.sc_engage(False)
+        return True
+
     def mnvr_to_target(self, scr_reg):
         """ Maneuver to Target using compass then target before performing a jump."""
         logger.debug('mnvr_to_target entered')
@@ -2209,9 +2282,22 @@ class EDAutopilot:
         self.sun_avoid(scr_reg, scooping=False)
 
         self.set_throttle_50()
+        body = self._near_planet_in_sc()
+        if body:
+            self._escape_planet_sc(body)
+            self._dropped_while_aligning()
         # Start the FSD charge now: it takes ~15 s and runs while we align. A charged FSD waits with
         # 'please align ship with trajectory' until we point at the target, then jumps.
-        self._precharge_fsd()
+        if not self._precharge_fsd() and not body:
+            # The FSD does not charge: a body between us and the target? Not seen in the journal yet (the
+            # ApproachBody event can come a few seconds after the undock), look again shortly
+            sleep(2)
+            self.jn.ship_state()
+            body = self._near_planet_in_sc()
+            if body:
+                self._escape_planet_sc(body)
+                self._dropped_while_aligning()
+                self._precharge_fsd()
         res = self.compass_align(scr_reg)
         # Quick calibrate the compass
         # if res:
@@ -2224,10 +2310,21 @@ class EDAutopilot:
                 logger.debug('mnvr_to_target: jump already started.')
                 return
             self.set_throttle_50()
+            body = self._near_planet_in_sc()
+            if body and not self.status.get_flag(FlagsFsdCharging):
+                self._escape_planet_sc(body)
+                self._dropped_while_aligning()
+                self._precharge_fsd()
+                self.compass_align(scr_reg)
             align_res = self.sc_target_align(scr_reg)
             if self._jump_started():
                 logger.debug('mnvr_to_target: jump started during target align.')
                 return
+            if self._dropped_while_aligning():
+                self.compass_align(scr_reg)
+                continue
+            if align_res == ScTargetAlignReturn.Planet:
+                continue  # the planet check at the top of the loop turns away from it
             if align_res == ScTargetAlignReturn.Lost:
                 self.set_throttle_50()
                 compass_ok = self.compass_align(scr_reg)  # Compass Align
@@ -2310,6 +2407,9 @@ class EDAutopilot:
 
         # Try to get the target 5 times before quiting
         for i in range(5):
+            # A planet ahead (ApproachBody) and the FSD is not charging: stop aligning, turn away first
+            if not self.status.get_flag(FlagsFsdCharging) and self._near_planet_in_sc():
+                return ScTargetAlignReturn.Planet
             # Check Target and Compass
             # nav_off1 = self.get_nav_offset(scr_reg)
             tar_off1 = self.get_compass_target_offset()
@@ -2596,7 +2696,12 @@ class EDAutopilot:
                 res = self.status.wait_for_flag_on(FlagsFsdCharging, 5)
                 if not res:
                     logger.error('FSD failed to charge.')
-                    if i >= 1:
+                    body = self._near_planet_in_sc()
+                    if body:
+                        self._escape_planet_sc(body)
+                        self._dropped_while_aligning()
+                        self.mnvr_to_target(scr_reg)
+                    elif i >= 1:
                         self._escape_jump_blocked(scr_reg)
                     continue
 

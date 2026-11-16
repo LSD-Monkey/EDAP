@@ -1,3 +1,15 @@
+# 16/11/2026 v1.9.4 b52 - planet ahead while aligning for the jump
+13:19 right after undocking from Rucker Enterprise (orbits Ostyat A 2): the route target was behind the planet, the
+FSD did not charge ('target obscured'), EDAP aligned towards the target at 50% for 45 s and the game pulled the ship
+out of supercruise at the planet (the journal had reported ApproachBody 27 s before). EDAP had no idea of planets
+while aligning in supercruise.
+- NEW the journal events ApproachBody/LeaveBody are tracked ('near_body'). While aligning for a jump (before, in
+  every alignment step and when the FSD does not charge): in the approach zone of a planet and the FSD not charging
+  -> stop, turn away from the planet (by the climb rate when the altimeter is on, else pitch up 90 deg), fly off at
+  full throttle until LeaveBody ('PlanetEscapeTime', max. 45 s), then align again.
+- Dropped out of supercruise during the alignment anyway -> back into supercruise and align again (before: kept
+  'aligning' in normal space).
+
 # 16/11/2026 v1.9.4 b51 - cargo not delivered: interdiction during the escape, line of sight, focus
 Session 2026-11-16: the bot never reached the sell station Rucker Enterprise twice.
 - FIX 12:44: the same NPC tried a 3rd interdiction while the ship charged the FSD to leave the system. The new

@@ -251,6 +251,7 @@ class EDJournal:
             'ship_size': None,
             'has_fuel_scoop': None,
             'sc_exit_body_type': '',
+            'near_body': '',  # planet whose approach zone the ship is in (journal ApproachBody .. LeaveBody)
             'SupercruiseDestinationDrop_type': None,
             'has_adv_dock_comp': None,
             'has_std_dock_comp': None,
@@ -340,6 +341,15 @@ class EDJournal:
             elif log_event == 'SupercruiseEntry' or log_event == 'FSDJump':
                 self.ship['status'] = 'in_supercruise'
                 self.ship['sc_exit_body_type'] = ''
+                if log_event == 'FSDJump':
+                    self.ship['near_body'] = ''
+
+            elif log_event == 'ApproachBody':
+                # In supercruise close to a planet (orbital cruise zone): flying on towards it drops the ship out
+                self.ship['near_body'] = log.get('Body') or ''
+
+            elif log_event == 'LeaveBody':
+                self.ship['near_body'] = ''
 
             elif log_event == "DockingGranted":
                 self.ship['status'] = 'dockinggranted'

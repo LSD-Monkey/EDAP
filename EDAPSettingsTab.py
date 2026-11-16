@@ -67,6 +67,10 @@ SETTINGS: list[dict] = [
                           "wait until the game is playable again."),
     dict(section="Waypoint Assist", key="ReconnectMode", label="Fail-safe: game mode for reconnect", type="choice",
          choices=["Solo", "Open"], tip="Game mode chosen when reconnecting."),
+    dict(section="Waypoint Assist", key="PlanetEscapeTime", label="Planet ahead: fly away max. (s)", type="int",
+         min=10, max=180, tip="In supercruise inside the approach zone of a planet while aligning for a jump (the "
+                              "game would drop the ship there): EDAP turns away from the planet and flies off at "
+                              "full throttle until the game reports that the planet is left, at most this long."),
     dict(section="Waypoint Assist", key="InterdictionEscapeSystem", label="Interdicted again: leave the system",
          type="bool", tip="A 2nd interdiction within 'Interdictions count as repeated': after submitting, EDAP jumps "
                           "to a neighbour system by hyperspace (an NPC pirate can not follow) and then flies the "
