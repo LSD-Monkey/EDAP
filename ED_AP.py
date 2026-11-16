@@ -506,6 +506,7 @@ class EDAutopilot:
             "TradeMaxHopDistance": 50,  # Trade tab: max. distance between the two stations in ly
             "TradeMaxArrivalLs": 5000,  # Trade tab: max. distance of a station from the arrival star
             "TradeMaxAgeHours": 5,  # Trade tab: ignore market data older than this (was 24)
+            "TradeDataSource": "Spansh",  # market data: 'Spansh' or 'Ardent' (the other one is the fallback)
             "TradeMinVolume": 10000,  # Trade tab: min. supply/demand (0 = cargo capacity; was 0)
             "TradeCommodityCount": 80,  # Trade tab: number of commodities searched (most valuable first)
             "TradeIncludeCarriers": False,  # Trade tab: include fleet carriers
@@ -615,7 +616,8 @@ class EDAutopilot:
                          ('TradeMinProfitPerTon', 1000), ('PlanetMinAltitude', 3000),
                          ('JumpBlockedEscapeTime', 20), ('SCAssistApproachTime', 180),
                          ('TradeDumpForeignCargo', True), ('InterdictionEscapeSystem', True),
-                         ('InterdictionRepeatMinutes', 8), ('RepairStopHull', 60), ('DockFirstRequestDelay', 8)):
+                         ('InterdictionRepeatMinutes', 8), ('RepairStopHull', 60), ('DockFirstRequestDelay', 8),
+                         ('TradeDataSource', 'Spansh')):
                 cnf.setdefault(k, v)
             # New trade search defaults (2026-11-11): saved configs with the old defaults get the new ones once
             if not cnf.get('TradeDefaultsV2'):

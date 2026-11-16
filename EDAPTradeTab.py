@@ -144,7 +144,7 @@ class TradeTab:
         bar = ttk.Frame(frm)
         bar.grid(row=5, column=0, columnspan=6, sticky="EW", pady=(6, 0))
         bar.columnconfigure(0, weight=1)
-        self.lbl_status = ttk.Label(bar, text="Market data: Ardent Insight (EDDN, uploaded by players).",
+        self.lbl_status = ttk.Label(bar, text="Market data: Spansh / Ardent Insight (EDDN, uploaded by players), setting 'Trade: market data source'.",
                                     foreground="#9a9a9a", wraplength=760, justify=tk.LEFT)
         self.lbl_status.grid(row=0, column=0, sticky="W")
         self.btn_search = ttk.Button(bar, text="Search", style="Accent.TButton", command=self.search, width=14)

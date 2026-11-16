@@ -7,12 +7,12 @@ The route was found with the prices of the search. While trading the supply of t
 can run out (other commanders buy it, the stock does not refill fast enough) or the price at the destination drops.
 Then the hold would be flown half empty, or with a commodity that is no longer the best one.
 
-At the buy station (Market.json is current there) and with the prices of the destination station (Ardent):
+At the buy station (Market.json is current there) and with the prices of the destination station (Spansh / Ardent):
   - every commodity that can be bought here and is bought at the destination is rated by profit per ton,
   - the hold is filled in that order: the best commodity as far as its stock goes, then the next one, ...
   - commodities with less than 'TradeMinProfitPerTon' (default 1000 cr/t) are not bought.
 The waypoint file is updated: this station buys the new list, the destination sells it.
-Without destination prices (Ardent not reachable, station not known) nothing is changed.
+Without destination prices (market data not reachable, station not known) nothing is changed.
 """
 
 from EDlogger import logger
@@ -39,16 +39,16 @@ def _station_matches(ardent_name: str, wp_name: str) -> bool:
     if _norm(a) == _norm(b):
         return True
     m = CALLSIGN_RE.search(a)
-    return bool(m and m.group(1) in b)  # carrier: Ardent has the call sign, the waypoint 'NAME CALL-SIGN'
+    return bool(m and m.group(1) in b)  # carrier: the market data has the call sign, the waypoint 'NAME CALL-SIGN'
 
 
 def destination_prices(system: str, station: str) -> dict[str, tuple[int, int]] | None:
     """ {symbol: (sell price, demand)} at the destination station, or None if unknown. """
-    from EDTradeFinder import ArdentClient, _norm
+    from EDTradeFinder import MarketClient, _norm
     try:
-        rows = ArdentClient(cache_secs=300).system_commodities(system) or []
+        rows = MarketClient(cache_secs=300).system_commodities(system) or []
     except Exception as e:
-        logger.warning(f"trade adapt: Ardent {system}: {e}")
+        logger.warning(f"trade adapt: market data {system}: {e}")
         return None
     out = {}
     for r in rows:

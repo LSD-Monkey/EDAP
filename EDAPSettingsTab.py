@@ -93,8 +93,12 @@ SETTINGS: list[dict] = [
                             "pad to refuel, then continues."),
     dict(section="Waypoint Assist", key="TradeAdaptCommodity", label="Trade: adapt the purchase", type="bool",
          tip="At the buy station the commodities are rated with the current stock (Market.json) and the prices of "
-             "the destination (Ardent). If the planned commodity is short or no longer the best, the hold is "
+             "the destination (Spansh / Ardent). If the planned commodity is short or no longer the best, the hold is "
              "filled with the best ones (most profit per ton first). The waypoint file is updated."),
+    dict(section="Waypoint Assist", key="TradeDataSource", label="Trade: market data source", type="choice",
+         choices=["Spansh", "Ardent"], tip="Where the Trade tab, the purchase adapt, the presell and the fuel stop get "
+                                          "the station prices from (both EDDN data uploaded by players). If the "
+                                          "chosen source does not answer, the other one is used."),
     dict(section="Waypoint Assist", key="TradeMinProfitPerTon", label="Trade: min. profit (cr/t)", type="int",
          min=0, max=100000, tip="Commodities with less profit per ton are not bought when adapting the purchase."),
     dict(section="Waypoint Assist", key="TradeDumpForeignCargo", label="Trade: sell cargo the route does not use",

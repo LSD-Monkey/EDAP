@@ -1,3 +1,13 @@
+# 16/11/2026 v1.9.4 b50 - Spansh as market data source
+The Ardent Insight API no longer delivered data, the Trade tab found no routes.
+- NEW market data from Spansh (spansh.co.uk station search), setting 'TradeDataSource' (default 'Spansh'). The trade
+  search loads all stations with a market in the search area (market not older than the max. age) in pages of 500,
+  each with its whole market, and checks all commodities from that (no request per commodity).
+- Ardent stays available; if the chosen source fails the other one is used automatically (MarketClient). Used by
+  the Trade tab, the new route of the fail-safe, the presell, the fuel stop and the purchase adapt.
+- Spansh station types and commodity names are converted to the journal/Ardent ones (Planetary Port -> CraterPort,
+  Drake-Class Carrier -> FleetCarrier, Agri-Medicines -> agriculturalmedicines, ...), so all filters work as before.
+
 # 11/11/2026 v1.9.4 b49 - interdictions, planets, damage, session report
 Journals 2026-11-01 to 11-11: the same NPC pirate interdicted 14x (11-09) and 9x (11-11) in a row every ~80 s. After
 submitting EDAP re-entered supercruise and stood still for 15-30 s at throttle 0 to activate the SC Assist in the

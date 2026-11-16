@@ -743,16 +743,17 @@ class WaypointRecovery:
         jr = self._jump_range()
         cands = {}
         try:
-            from EDTradeFinder import (ArdentClient, pad_size, _norm, CARRIER_TYPES, EXCLUDED_TYPES, MEGASHIP_TYPES,
+            from EDTradeFinder import (MarketClient, pad_size, _norm, CARRIER_TYPES, EXCLUDED_TYPES, MEGASHIP_TYPES,
                                        SETTLEMENT_TYPES, PLANETARY_TYPES)
-            client = ArdentClient()
+            client = MarketClient()
             radius = min(500.0, max(20.0, jr * 4))
             # Hydrogen fuel is bought or sold by almost every station with a market (and these refuel)
             for kind in ('exports', 'imports'):
                 try:
-                    rows = client.nearby(kind, cur, 'hydrogenfuel', radius, 1, 90, False) or []
+                    rows = client.nearby(kind, cur, 'hydrogenfuel', radius, 1, 90, False, by='distance',
+                                         limit=60) or []
                 except Exception as e:
-                    logger.warning(f"fuel stop: Ardent {kind}: {e}")
+                    logger.warning(f"fuel stop: market data {kind}: {e}")
                     rows = []
                 for r in rows:
                     t = _norm(r.get('stationType') or '')
@@ -894,7 +895,7 @@ def presell_cargo(ap) -> bool:
 
 def _presell_cargo(ap) -> bool:
     from CargoParser import CargoParser
-    from EDTradeFinder import ArdentClient, TradeFinder, display_name, _norm, LARGE_PAD_TYPES
+    from EDTradeFinder import MarketClient, TradeFinder, display_name, _norm, LARGE_PAD_TYPES
     ORBITAL_TYPES = set(LARGE_PAD_TYPES) | {'outpost', 'coriolisstarport', 'orbisstarport', 'ocellusstarport'}
     ORBITAL_TYPES -= {'craterport'}
 
@@ -943,7 +944,7 @@ def _presell_cargo(ap) -> bool:
                 max_age_hours=max(48.0, float(cfg.get('TradeMaxAgeHours', 5))),
                 carrier_max_age_hours=float(cfg.get('TradeCarrierMaxAgeHours', 6)))
     radius = min(200.0, float(cfg.get('TradeSearchRadius', 50)))
-    client = ArdentClient()
+    client = MarketClient()
     finder = TradeFinder(client)
     stations: dict[str, dict] = {}
     for f in foreign:
@@ -953,7 +954,7 @@ def _presell_cargo(ap) -> bool:
                 rows = client.nearby('imports', cur, f['sym'], radius, min_vol, filt['max_age_hours'] / 24.0,
                                      filt['carriers']) or []
             except Exception as e:
-                logger.warning(f"presell: Ardent imports {f['sym']}: {e}")
+                logger.warning(f"presell: market data imports {f['sym']}: {e}")
                 rows = []
             if rows:
                 break

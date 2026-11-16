@@ -38,10 +38,15 @@ it. **Save as waypoint file** only writes and loads the file.
 
 ## How it works
 
-* Market data comes from the [Ardent Insight API](https://github.com/iaincollins/ardent-api) (EDDN data uploaded by
-  players, the same source Inara and others use).
-* For every commodity (the most valuable first) the sellers and the buyers around the reference system are loaded
-  (Ardent returns max. 1000 of each per commodity). Every seller/buyer pair within the max. distance between the
+* Market data (EDDN data uploaded by players, the same source Inara and others use) comes from
+  [Spansh](https://spansh.co.uk/stations) (default) or the [Ardent Insight API](https://github.com/iaincollins/ardent-api),
+  setting `TradeDataSource`. If the chosen source fails, the other one is used automatically.
+* Spansh: one station search loads all stations with a market within (start distance + hop distance) of the
+  reference system whose market is not older than the max. age, each with its whole market (max. 4000 stations,
+  the closest first). All commodities are then checked without further requests.
+* Ardent: for every commodity (the most valuable first) the sellers and the buyers around the reference system are
+  loaded (max. 1000 of each per commodity).
+* Every seller/buyer pair within the max. distance between the
   stations is a trade; for a round trip the best commodity for the way back is searched among all commodities. If
   there is none, the route is shown with "- (back empty)".
 * Always excluded: construction sites and colonisation ships. Stations with unknown pad size are excluded when

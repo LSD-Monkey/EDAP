@@ -7,7 +7,10 @@ Searches the area around a reference system (usually where the ship is) for the 
  - one way: buy commodity X at station A, sell it at station B,
  - round trips: A -> B with X and B -> A with Y (repeated by Waypoint Assist).
 
-Market data: Ardent Insight API (https://api.ardent-insight.com, EDDN data uploaded by players).
+Market data (EDDN data uploaded by players), setting 'TradeDataSource':
+ - Spansh (https://spansh.co.uk, default): one station search of the whole area, every station with its full market,
+ - Ardent Insight API (https://api.ardent-insight.com): one request per commodity.
+ If the chosen source fails, the other one is used (MarketClient).
  1. Commodity report: the commodities worth checking (highest price level, not rare/salvage).
  2. For every commodity: sellers ('nearby/exports') and buyers ('nearby/imports') around the reference system.
  3. Every seller/buyer pair within the max. distance between the stations is a trade leg.
@@ -18,6 +21,8 @@ import re
 import json
 import math
 import time
+import gzip
+import os
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +31,7 @@ from datetime import datetime, timezone
 from EDlogger import logger
 
 ARDENT_BASE = "https://api.ardent-insight.com/v2"
+SPANSH_SEARCH = "https://spansh.co.uk/api/stations/search"
 USER_AGENT = "EDAP-TradeFinder/1.0 (github.com/LSD-Monkey/EDAP)"
 
 # Station types that can never be used (construction sites, points of interest)
@@ -80,6 +86,8 @@ def display_name(symbol: str, local_names: dict[str, str] | None = None) -> str:
         return local_names[sym]
     if sym in SYMBOL_NAMES:
         return SYMBOL_NAMES[sym]
+    if sym in SPANSH_DISPLAY:
+        return SPANSH_DISPLAY[sym]
     if _DISPLAY_CACHE is None:
         _DISPLAY_CACHE = {}
         try:
@@ -186,12 +194,363 @@ class ArdentClient:
         return self.get(f"/system/name/{self.q(system)}/commodities")
 
     def nearby(self, kind: str, system: str, symbol: str, max_distance: float, min_volume: int, max_days: float,
-               carriers: bool):
+               carriers: bool, **_kw):
         """ kind 'exports' (where to buy) or 'imports' (where to sell). """
         return self.get(f"/system/name/{self.q(system)}/commodity/name/{self.q(symbol)}/nearby/{kind}",
                         {'maxDistance': int(min(500, max_distance)), 'minVolume': int(max(1, min_volume)),
                          'fleetCarriers': None if carriers else 'false',
                          'maxDaysAgo': max(1, int(math.ceil(max_days)))})
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Spansh: station types -> Ardent/journal station types (the filters work with these)
+SPANSH_TYPES = {
+    'coriolisstarport': 'Coriolis', 'orbisstarport': 'Orbis', 'ocellusstarport': 'Ocellus',
+    'dodecstarport': 'Dodec', 'asteroidbase': 'AsteroidBase', 'outpost': 'Outpost',
+    'planetaryoutpost': 'CraterOutpost', 'planetaryport': 'CraterPort', 'settlement': 'OnFootSettlement',
+    'odysseysettlement': 'OnFootSettlement', 'megaship': 'MegaShip', 'drakeclasscarrier': 'FleetCarrier',
+    'spaceconstructiondepot': 'SpaceConstructionDepot', 'planetaryconstructiondepot': 'PlanetaryConstructionDepot',
+}
+# Spansh commodity names (display names) -> symbols where they differ (Agri-Medicines -> agriculturalmedicines)
+_NAME_TO_SYMBOL = {_norm(v): k for k, v in SYMBOL_NAMES.items()}
+SPANSH_DISPLAY: dict[str, str] = {}  # symbol -> name as Spansh (the game, English) writes it
+
+
+def spansh_symbol(name: str) -> str:
+    n = _norm(name)
+    sym = _NAME_TO_SYMBOL.get(n, n)
+    SPANSH_DISPLAY.setdefault(sym, name)
+    return sym
+
+
+def _spansh_type(t: str) -> str:
+    n = _norm(t)
+    if n in SPANSH_TYPES:
+        return SPANSH_TYPES[n]
+    if 'carrier' in n:
+        return 'FleetCarrier'
+    if 'settlement' in n:
+        return 'OnFootSettlement'
+    return t or ''
+
+
+def _spansh_pad(st: dict) -> int | None:
+    if st.get('large_pads') or st.get('has_large_pad'):
+        return 3
+    if st.get('medium_pads'):
+        return 2
+    if st.get('small_pads'):
+        return 1
+    return None
+
+
+class SpanshClient:
+    """ Market data from the Spansh station search, in the row format of the Ardent client (stationName,
+    systemName, buyPrice, stock, ...), so that the trade finder, the presell, the fuel stop and the trade adapt work
+    with both.
+
+    Spansh returns every station with its whole market (about 70 KB per station uncompressed, gzip on the wire).
+    The trade search loads the whole area once (prepare), all commodities are then taken from it. Single queries
+    (fuel stop, presell) use a search for the one commodity, sorted by price or distance. """
+
+    PAGE = 500
+    MAX_RESULTS = 10000  # Spansh pages through the first 10000 results only
+
+    def __init__(self, timeout: float = 60.0, cache_secs: float = 600.0, max_stations: int = 4000):
+        self.timeout = timeout
+        self.cache_secs = cache_secs
+        self.max_stations = max_stations
+        self.requests = 0
+        self._cache: dict[str, tuple[float, object]] = {}
+        # Loaded areas: (time, ref, radius, max_age_h, rows by commodity symbol)
+        self._areas: list[tuple[float, str, float, float, dict[str, list[dict]]]] = []
+        self._report: list[dict] | None = None
+
+    # -- HTTP ----------------------------------------------------------------------------------------------------
+    def post(self, body: dict, cache: bool = True):
+        key = json.dumps(body, sort_keys=True)
+        hit = self._cache.get(key) if cache else None
+        if hit and time.time() - hit[0] < self.cache_secs:
+            return hit[1]
+        data = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(SPANSH_SEARCH, data=data, method='POST', headers={
+            'User-Agent': USER_AGENT, 'Accept': 'application/json', 'Content-Type': 'application/json',
+            'Accept-Encoding': 'gzip'})
+        last_err = None
+        for attempt in range(3):
+            try:
+                self.requests += 1
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    if resp.headers.get('Content-Encoding', '').lower() == 'gzip' or raw[:2] == b'\x1f\x8b':
+                        raw = gzip.decompress(raw)
+                out = json.loads(raw.decode('utf-8'))
+                if not cache:
+                    return out
+                self._cache[key] = (time.time(), out)
+                if len(self._cache) > 40:
+                    self._cache.pop(next(iter(self._cache)))
+                return out
+            except urllib.error.HTTPError as e:
+                if e.code == 400:
+                    # 'Invalid request' (e.g. unknown reference system): no data, not an outage
+                    try:
+                        msg = e.read().decode('utf-8', 'ignore')[:200]
+                    except Exception:
+                        msg = ''
+                    logger.debug(f"Spansh: 400 {msg}")
+                    return None
+                last_err = e
+            except Exception as e:
+                last_err = e
+            time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"Spansh request failed ({last_err})")
+
+    @staticmethod
+    def _age_filter(max_age_h: float) -> dict:
+        t0 = datetime.fromtimestamp(time.time() - max_age_h * 3600.0, tz=timezone.utc)
+        t1 = datetime.fromtimestamp(time.time() + 86400.0, tz=timezone.utc)
+        return {'value': [t0.strftime('%Y-%m-%dT%H:%M:%SZ'), t1.strftime('%Y-%m-%dT%H:%M:%SZ')],
+                'comparison': '<=>'}
+
+    def search(self, filters: dict, ref: str | None = None, sort: list | None = None, limit: int = 500) -> list[dict]:
+        out = []
+        page = 0
+        while len(out) < limit and (page + 1) * self.PAGE <= self.MAX_RESULTS + self.PAGE:
+            size = min(self.PAGE, limit - len(out))
+            body = {'filters': filters, 'size': size, 'page': page}
+            if ref:
+                body['reference_system'] = ref
+            if sort:
+                body['sort'] = sort
+            res = self.post(body)
+            if not res:
+                break
+            rows = res.get('results') or []
+            out.extend(rows)
+            if len(rows) < size or len(out) >= int(res.get('count') or 0):
+                break
+            page += 1
+        return out
+
+    # -- conversion ----------------------------------------------------------------------------------------------
+    @staticmethod
+    def _station_row(st: dict) -> dict:
+        return {
+            'marketId': st.get('market_id') or st.get('id'), 'stationName': st.get('name'),
+            'systemName': st.get('system_name'), 'stationType': _spansh_type(st.get('type') or ''),
+            'maxLandingPadSize': _spansh_pad(st), 'distanceToArrival': st.get('distance_to_arrival'),
+            'distance': st.get('distance'), 'systemX': st.get('system_x'), 'systemY': st.get('system_y'),
+            'systemZ': st.get('system_z'), 'updatedAt': st.get('market_updated_at'),
+        }
+
+    def _rows(self, stations: list[dict]) -> dict[str, list[dict]]:
+        """ symbol -> one row per station with buy price/stock and sell price/demand. """
+        by_sym: dict[str, list[dict]] = {}
+        for st in stations:
+            base = self._station_row(st)
+            for m in st.get('market') or []:
+                sym = spansh_symbol(m.get('commodity') or '')
+                if not sym:
+                    continue
+                r = dict(base, commodityName=sym, buyPrice=int(m.get('buy_price') or 0),
+                         stock=int(m.get('supply') or 0), sellPrice=int(m.get('sell_price') or 0),
+                         demand=int(m.get('demand') or 0))
+                by_sym.setdefault(sym, []).append(r)
+        return by_sym
+
+    # -- area (trade search) -------------------------------------------------------------------------------------
+    def prepare(self, ref_system: str, radius: float, max_age_hours: float, progress=None) -> int:
+        """ Loads all stations with a market within radius ly of ref_system whose market is at most max_age_hours
+        old. Returns the number of stations. """
+        if self._area(ref_system, radius, max_age_hours) is not None:
+            return -1
+        progress = progress or (lambda m: None)
+        filters = {'has_market': {'value': True}, 'distance': {'min': '0', 'max': str(float(radius))},
+                   'market_updated_at': self._age_filter(max_age_hours)}
+        # Every page is converted to compact rows right away: a full station (market, modules, ships) is ~70 KB
+        by_sym: dict[str, list[dict]] = {}
+        n, page = 0, 0
+        while n < self.max_stations:
+            body = {'filters': filters, 'size': self.PAGE, 'page': page, 'reference_system': ref_system,
+                    'sort': [{'distance': {'direction': 'asc'}}]}
+            res = self.post(body, cache=False)
+            if res is None:
+                raise RuntimeError(f"Spansh: reference system '{ref_system}' not known")
+            rows = res.get('results') or []
+            total = int(res.get('count') or 0)
+            for sym, lst in self._rows(rows).items():
+                by_sym.setdefault(sym, []).extend(lst)
+            n += len(rows)
+            del res, rows
+            progress(f"Spansh: {n}/{min(total, self.max_stations)} stations loaded...")
+            if n >= total or n % self.PAGE or (page + 2) * self.PAGE > self.MAX_RESULTS:
+                break
+            page += 1
+        # Do not keep the full answers (markets, modules, ships) in the request cache
+        self._cache.clear()
+        self._areas = [a for a in self._areas if time.time() - a[0] < self.cache_secs][-2:]
+        self._areas.append((time.time(), ref_system.lower(), float(radius), float(max_age_hours), by_sym))
+        self._report = self._build_report(by_sym)
+        logger.info(f"Spansh: {n} stations within {radius:g} ly of {ref_system} "
+                    f"(market <= {max_age_hours:g} h), {len(by_sym)} commodities, {self.requests} requests")
+        return n
+
+    def _area(self, ref: str, radius: float, max_age_h: float) -> dict[str, list[dict]] | None:
+        for t, r, rad, age, by_sym in reversed(self._areas):
+            if time.time() - t < self.cache_secs and r == (ref or '').lower() and rad >= radius - 0.01 \
+                    and age >= max_age_h - 0.01:
+                return by_sym
+        return None
+
+    @staticmethod
+    def _build_report(by_sym: dict[str, list[dict]]) -> list[dict]:
+        """ Commodity report like Ardent '/commodities', made from the loaded area. """
+        rep = []
+        for sym, rows in by_sym.items():
+            sells = [r['sellPrice'] for r in rows if r['sellPrice'] > 0 and r['demand'] > 0]
+            buys = [r['buyPrice'] for r in rows if r['buyPrice'] > 0 and r['stock'] > 0]
+            rep.append({'commodityName': sym, 'totalStock': sum(r['stock'] for r in rows),
+                        'totalDemand': sum(r['demand'] for r in rows),
+                        'avgSellPrice': (sum(sells) / len(sells)) if sells else 0,
+                        'maxSellPrice': max(sells) if sells else 0,
+                        'minBuyPrice': min(buys) if buys else 0})
+        return rep
+
+    # -- Ardent compatible interface -----------------------------------------------------------------------------
+    def commodities(self):
+        """ Report of the area loaded last (prepare), None without one. """
+        return self._report
+
+    def nearby(self, kind: str, system: str, symbol: str, max_distance: float, min_volume: int, max_days: float,
+               carriers: bool, by: str = 'price', limit: int = 60):
+        """ kind 'exports' (stations that sell it, where to buy) or 'imports' (stations that buy it). """
+        max_age_h = max_days * 24.0
+        sym = _norm(symbol)
+        min_volume = int(max(1, min_volume))
+        area = self._area(system, max_distance, max_age_h)
+        if area is not None:
+            rows = area.get(sym) or []
+        else:
+            name = SPANSH_DISPLAY.get(sym) or display_name(sym)
+            field = 'supply' if kind == 'exports' else 'demand'
+            filters = {'market': [{'name': name, field: {'value': [str(min_volume), '999999999'],
+                                                          'comparison': '<=>'}}],
+                       'distance': {'min': '0', 'max': str(float(max_distance))},
+                       'market_updated_at': self._age_filter(max_age_h)}
+            if by == 'distance':
+                sort = [{'distance': {'direction': 'asc'}}]
+            elif kind == 'exports':
+                sort = [{'market_buy_price': [{'name': name, 'direction': 'asc'}]}]
+            else:
+                sort = [{'market_sell_price': [{'name': name, 'direction': 'desc'}]}]
+            stations = self.search(filters, ref=system, sort=sort, limit=limit)
+            rows = self._rows(stations).get(sym) or []
+            self._cache.clear()
+        out = []
+        for r in rows:
+            if r['distance'] is not None and float(r['distance']) > max_distance:
+                continue
+            if not carriers and _norm(r.get('stationType') or '') in CARRIER_TYPES:
+                continue
+            if kind == 'exports':
+                if r['buyPrice'] > 0 and r['stock'] >= min_volume:
+                    out.append(r)
+            elif r['sellPrice'] > 0 and r['demand'] >= min_volume:
+                out.append(r)
+        return out
+
+    def system_commodities(self, system: str):
+        """ All buy/sell orders of all stations in the system. """
+        stations = self.search({'system_name': {'value': system}, 'has_market': {'value': True}}, limit=500)
+        stations = [s for s in stations if (s.get('system_name') or '').lower() == (system or '').lower()]
+        rows = [r for lst in self._rows(stations).values() for r in lst]
+        self._cache.clear()
+        return rows
+
+    def system(self, system: str):
+        res = self.search({'system_name': {'value': system}}, limit=1)
+        return res[0] if res else None
+
+
+def data_source() -> str:
+    """ 'Spansh' or 'Ardent' (setting TradeDataSource in configs/AP.json). """
+    try:
+        with open(os.path.join('.', 'configs', 'AP.json'), encoding='utf-8') as fh:
+            src = json.load(fh).get('TradeDataSource') or 'Spansh'
+    except Exception:
+        src = 'Spansh'
+    return 'Ardent' if str(src).lower().startswith('ard') else 'Spansh'
+
+
+class MarketClient:
+    """ The chosen market data source with the other one as fallback: if a request of the active source fails
+    (no answer, error) or the trade search gets no commodity list from it, the other source is used from then on
+    (for this client). """
+
+    def __init__(self, source: str | None = None, cache_secs: float = 600.0):
+        src = source or data_source()
+        sp, ar = SpanshClient(cache_secs=cache_secs), ArdentClient(cache_secs=cache_secs)
+        self.clients = [sp, ar] if src == 'Spansh' else [ar, sp]
+        self.active = 0
+        self.prepared: tuple | None = None
+
+    @property
+    def name(self) -> str:
+        return 'Spansh' if isinstance(self.clients[self.active], SpanshClient) else 'Ardent'
+
+    @property
+    def requests(self) -> int:
+        return sum(c.requests for c in self.clients)
+
+    def _switch(self, why) -> bool:
+        if self.active + 1 >= len(self.clients):
+            return False
+        old = self.name
+        self.active += 1
+        logger.warning(f"Market data: {old} failed ({why}), using {self.name}.")
+        if self.prepared:
+            self._prepare_active()
+        return True
+
+    def _call(self, fn: str, *a, **kw):
+        while True:
+            c = self.clients[self.active]
+            try:
+                return getattr(c, fn)(*a, **kw)
+            except Exception as e:
+                if not self._switch(e):
+                    raise
+
+    def _prepare_active(self):
+        c = self.clients[self.active]
+        if hasattr(c, 'prepare'):
+            c.prepare(*self.prepared[:3], progress=self.prepared[3])
+
+    def prepare(self, ref_system: str, radius: float, max_age_hours: float, progress=None):
+        self.prepared = (ref_system, radius, max_age_hours, progress)
+        while True:
+            try:
+                self._prepare_active()
+                return
+            except Exception as e:
+                if not self._switch(e):
+                    raise
+
+    def commodities(self):
+        rep = self._call('commodities')
+        while not rep and self._switch('no commodity list'):
+            rep = self._call('commodities')
+        return rep
+
+    def nearby(self, *a, **kw):
+        return self._call('nearby', *a, **kw)
+
+    def system_commodities(self, system: str):
+        return self._call('system_commodities', system)
+
+    def system(self, system: str):
+        return self._call('system', system)
 
 
 def estimate_trip_secs(distance_ly: float, jump_range: float, arrival_a: float, arrival_b: float,
@@ -364,8 +723,8 @@ def learn_timing(journal_dir: str, max_files: int = 12) -> dict | None:
 
 
 class TradeFinder:
-    def __init__(self, client: ArdentClient | None = None, progress=None):
-        self.client = client or ArdentClient()
+    def __init__(self, client=None, progress=None):
+        self.client = client or MarketClient()
         self.progress = progress or (lambda msg: None)
         self.rejected: dict[str, int] = {}
 
@@ -473,10 +832,19 @@ class TradeFinder:
         radius = min(500.0, max_start_distance + max_hop_distance)
         max_days = max(1.0, max_age_hours / 24.0)
 
+        if hasattr(self.client, 'prepare'):
+            self.progress(f"Loading the markets within {radius:g} ly of {ref_system}...")
+            self.client.prepare(ref_system, radius, max_age_hours, progress=self.progress)
         self.progress("Loading the commodity list...")
         symbols = self.commodity_list(commodity_count)
         if not symbols:
-            raise RuntimeError("Could not load the commodity list (Ardent API).")
+            raise RuntimeError("Could not load the commodity list (Spansh / Ardent).")
+        src = getattr(self.client, 'name', '')
+        if src:
+            logger.info(f"Trade finder: market data from {src}")
+        if src == 'Spansh':
+            # All markets of the area are loaded already: checking every commodity costs no requests
+            symbols = self.commodity_list(max(commodity_count, 400))
         self.progress(f"Searching {len(symbols)} commodities within {radius:g} ly of {ref_system}...")
 
         def load(sym):
