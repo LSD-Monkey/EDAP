@@ -106,7 +106,13 @@ class SCAssistResult(Enum):
     StarAhead = 4  # a star fills the view in flight direction: the SCA would fly into it (emergency drop)
 
 
-_SCA_DIST_RE = re.compile(r'(\d+(?:[.,]\d+)?)\s*(LS|LY|KM|MM|AU|M)(?![A-Z])')
+_SCA_DIST_RE = re.compile(r'(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:[.,]\d+)?)\s*(LS|LY|KM|MM|AU|M)(?![A-Z])')
+
+
+def _is_no_los_text(text: str) -> bool:
+    """ 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' (OCR, spaces removed, also with small OCR errors). """
+    t = (text or '').upper().replace(' ', '')
+    return 'LINEOFSIGHT' in t or 'SIGHTTOTARGET' in t or ('OBTAIN' in t and 'SIGHT' in t)
 
 
 def sca_distance_ls(dist: str | None) -> float | None:
@@ -128,7 +134,12 @@ def parse_sca_distance(text: str) -> str | None:
     m = _SCA_DIST_RE.search(text.upper())
     if not m:
         return None
-    return m.group(1).replace(',', '.') + m.group(2)
+    num = m.group(1)
+    if re.fullmatch(r'\d{1,3}(?:,\d{3})+(?:\.\d+)?', num):
+        num = num.replace(',', '')  # thousands separators: '1,780,674LS'
+    else:
+        num = num.replace(',', '.')  # decimal comma
+    return num + m.group(2)
 
 
 class FSDAssistReturn(Enum):
@@ -481,6 +492,7 @@ class EDAutopilot:
             "TradeCarrierMaxAgeHours": 6,
             "PlanetMinAltitude": 3000,  # m: below this and sinking -> throttle 0 and pitch up away from the planet
             "JumpBlockedEscapeTime": 20,  # s: FSD does not charge (target obscured): turn away and fly this long
+            "RefocusEliteAfter": 60,  # s Elite not the active window during an assist -> bring it to the front (0 = off)
             "SCAssistApproachTime": 180,  # s without getting closer to the target (circling) -> re-activate the SCA
             "TradeDumpForeignCargo": True,  # trade: sell cargo the route does not sell where it is bought
             "InterdictionEscapeSystem": True,  # 2nd interdiction in a short time: leave the system by hyperspace
@@ -617,7 +629,7 @@ class EDAutopilot:
                          ('JumpBlockedEscapeTime', 20), ('SCAssistApproachTime', 180),
                          ('TradeDumpForeignCargo', True), ('InterdictionEscapeSystem', True),
                          ('InterdictionRepeatMinutes', 8), ('RepairStopHull', 60), ('DockFirstRequestDelay', 8),
-                         ('TradeDataSource', 'Spansh')):
+                         ('TradeDataSource', 'Spansh'), ('RefocusEliteAfter', 60)):
                 cnf.setdefault(k, v)
             # New trade search defaults (2026-11-11): saved configs with the old defaults get the new ones once
             if not cnf.get('TradeDefaultsV2'):
@@ -801,6 +813,7 @@ class EDAutopilot:
         if self.keys:
             self.keys.activate_window = self.config['ActivateEliteEachKey']
             self.keys.pause_when_unfocused = self.config['PauseWhenUnfocused']
+            self.keys.refocus_after = float(self.config.get('RefocusEliteAfter', 60) or 0)
             self.keys.randomness = self.config['EnableRandomness']
             self.keys.key_mod_delay = self.config['Key_ModDelay']
             self.keys.key_def_hold_time = self.config['Key_DefHoldTime']
@@ -3743,6 +3756,7 @@ class EDAutopilot:
         best_ls, t_best = None, time.time()
         last_star_time = time.time()
         star_cnt = 0
+        unfocused_since = None
 
         while True:
             sleep(0.5)
@@ -3793,7 +3807,26 @@ class EDAutopilot:
                 last_ocr_time = time.time()
                 last_los_time = time.time()
                 last_progress = time.time()
+                t_best = time.time()
+                # 2026-11-16 10:09-11:08: Elite was not the active window for 58 min, EDAP waited silently while
+                # the SCA could not drop (no line of sight) and the ship flew away from the station
+                if unfocused_since is None:
+                    unfocused_since = time.time()
+                    logger.info("SC Assist: Elite is not the active window, HUD checks paused.")
+                refocus = float(self.config.get('RefocusEliteAfter', 60) or 0)
+                if refocus > 0 and time.time() - unfocused_since > refocus:
+                    self.ap_ckb('log+vce', f"Elite was not the active window for {refocus:.0f} s, "
+                                           f"bringing it to the front.")
+                    set_focus_elite_window()
+                    unfocused_since = None
+                    sleep(0.5)
+                if 0 < timeout < (time.time() - start_time):
+                    self.ap_ckb('log', f"SC Assist timeout ({timeout} s).")
+                    return SCAssistResult.Failed
                 continue
+            if unfocused_since is not None:
+                logger.info(f"SC Assist: Elite active again after {time.time() - unfocused_since:.0f} s.")
+                unfocused_since = None
 
             # Close to the destination (km/m, or < 50 Mm) the SCA drops us in a few seconds: no slow OCR any more,
             # the drop is then detected at once (was up to 7 s late, log 2026-10-20 18:41).
@@ -3837,7 +3870,7 @@ class EDAutopilot:
                     if los_cnt >= 2:  # seen twice in a row, avoid reacting on a single OCR hit
                         self.ap_ckb('log+vce', "Target obstructed, no line of sight.")
                         return SCAssistResult.NoLineOfSight
-                else:
+                elif not _is_no_los_text(getattr(self, '_sca_last_ocr', '')):
                     los_cnt = 0
 
             # Optional OCR check of the 'SUPERCRUISE ASSIST ACTIVE' HUD text
@@ -3851,6 +3884,15 @@ class EDAutopilot:
                     if not ocr_confirmed:
                         ocr_confirmed = True
                         self.ap_ckb('log', "Supercruise Assist active.")
+                elif _is_no_los_text(getattr(self, '_sca_last_ocr', '')):
+                    # The 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' message is shown where 'SUPERCRUISE ASSIST
+                    # ACTIVE' is (2026-11-16 10:09: read 3x there, the line of sight region only had the distance;
+                    # the SCA could not drop, the ship flew past the station and 1.8 million Ls away)
+                    los_cnt += 1
+                    if los_cnt >= 2:
+                        self.ap_ckb('log+vce', "Target obstructed, no line of sight.")
+                        return SCAssistResult.NoLineOfSight
+                    last_ocr_time = time.time() - ocr_interval + 1.5  # check again soon
                 elif 'ALIGNWITHTARGET' in getattr(self, '_sca_last_ocr', ''):
                     # The SCA is engaged but waits for the pilot to point the ship to the destination
                     # ('ALIGN WITH TARGET DESTINATION'). Without this EDAP just waited (video 2026-10-19,
@@ -4302,7 +4344,27 @@ class EDAutopilot:
         if getattr(self, '_pirate_escape_pending', False) and recovery is not None:
             self._pirate_escape_pending = False
             self._interdiction_log = []
-            recovery.pirate_escape()
+            try:
+                recovery.pirate_escape()
+            except EDAP_Interdicted:
+                # Interdicted again while leaving the system (2026-11-16 12:44, 3rd attempt of the same NPC while
+                # the FSD charged): handle it, then leave the system again
+                self._pirate_escape_pending = True
+                raise
+
+    def _handle_interdicted(self, recovery, max_rounds: int = 8):
+        """ EDAP_Interdicted in the engine thread, also when it comes again while the interdiction is handled or
+        while the ship leaves the system. Before, a 2nd EDAP_Interdicted inside the handler was caught as a stop
+        (EDAP_Interdicted is an EDAP_Interrupt) and Waypoint Assist stopped (2026-11-16 12:44, the cargo was not
+        delivered). """
+        for rnd in range(max_rounds):
+            try:
+                self._on_interdicted_exception(recovery)
+                return
+            except EDAP_Interdicted:
+                logger.info(f"Interdiction: interdicted again while handling the last one ({rnd + 1}).")
+                continue
+        self.ap_ckb('log', "Interdiction: handled several times in a row, continuing the route.")
 
     def _any_assist_active(self) -> bool:
         return bool(self.fsd_assist_enabled or self.sc_assist_enabled or self.waypoint_assist_enabled or
@@ -4546,7 +4608,13 @@ class EDAutopilot:
                 if self.waypoint.waypoints and int(self.config.get('TradePreSellMinTons', 100) or 0) > 0:
                     presell_cargo(self)
             except EDAP_Interdicted:
-                self._on_interdicted_exception(recovery)
+                try:
+                    self._handle_interdicted(recovery)
+                except EDAP_Interrupt:
+                    self._release_keys_safe()
+                    stopped = True
+                except Exception as e5:
+                    logger.exception(f"interdiction handling failed: {e5}")
             except EDAP_Interrupt:
                 logger.debug("Caught stop exception while selling the cargo first")
                 self._release_keys_safe()
@@ -4561,7 +4629,7 @@ class EDAutopilot:
                     failure = getattr(self.waypoint, 'abort_reason', '') or 'aborted'
                 except EDAP_Interdicted:
                     try:
-                        self._on_interdicted_exception(recovery)
+                        self._handle_interdicted(recovery)
                     except EDAP_Interrupt:
                         self._release_keys_safe()
                         break
@@ -4630,10 +4698,12 @@ class EDAutopilot:
                     recovery.handle_failure(failure)
                 except EDAP_Interdicted:
                     try:
-                        self._on_interdicted_exception(recovery)
+                        self._handle_interdicted(recovery)
                     except EDAP_Interrupt:
                         self._release_keys_safe()
                         break
+                    except Exception as e6:
+                        logger.exception(f"interdiction handling failed: {e6}")
                 except EDAP_GameNotRunning:
                     try:
                         recovery.wait_for_game()

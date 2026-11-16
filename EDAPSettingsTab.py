@@ -25,6 +25,9 @@ SETTINGS: list[dict] = [
     dict(section="General", key="PauseWhenUnfocused", label="Pause keys while Elite is not active", type="bool",
          tip="No key is sent while another window (e.g. EDAP, Discord) is in front. EDAP continues when you click "
              "into Elite again. Strongly recommended."),
+    dict(section="General", key="RefocusEliteAfter", label="Bring Elite to the front after (s)", type="int",
+         min=0, max=3600, tip="An assist is running and Elite has not been the active window for this long: EDAP "
+                              "brings Elite to the front itself and continues. 0: wait until you click into Elite."),
     dict(section="General", key="GameConnectionCheck", label="Stop on connection loss / main menu", type="bool",
          tip="Stops every assist when 'CONNECTION ERROR' is on screen, the game is in the main menu or was closed. "
              "Without it EDAP keeps pressing keys for hours after a disconnect."),

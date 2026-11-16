@@ -830,7 +830,9 @@ class TradeFinder:
         # Stations of a round trip are both start stations, so both need to be within the start distance plus
         # the distance between the stations (the closer one becomes the start).
         radius = min(500.0, max_start_distance + max_hop_distance)
-        max_days = max(1.0, max_age_hours / 24.0)
+        # Exact age (Ardent rounds up to whole days itself). max(1 day) made the Spansh client miss the loaded
+        # area (5 h) and search each commodity again (2026-11-16 08:54: 56 s, 'price too old 5827').
+        max_days = max_age_hours / 24.0
 
         if hasattr(self.client, 'prepare'):
             self.progress(f"Loading the markets within {radius:g} ly of {ref_system}...")

@@ -35,6 +35,7 @@ class EDKeys:
         self.key_repeat_delay = 0.1  # Delay between key press repeats
         self.activate_window = False
         self.pause_when_unfocused = True  # Pause (not stop) key input while Elite is not the foreground window
+        self.refocus_after = 60.0  # paused that long -> bring Elite to the front (0 = wait for the user)
         self.randomness = False  # Vary default hold times and delays between keys (EnableRandomness)
 
         self.keys_to_obtain = [
@@ -315,8 +316,14 @@ class EDKeys:
         start = monotonic()
         logger.info("Elite Dangerous is not the active window - key input paused.")
         self.ap_ckb('log', "Elite is not the active window - EDAP paused. Click into Elite to continue.")
+        last_try = start
         while not self.elite_has_focus():
             sleep(0.25)
+            if self.refocus_after > 0 and monotonic() - last_try > self.refocus_after:
+                last_try = monotonic()
+                self.ap_ckb('log', f"Elite was not the active window for {self.refocus_after:.0f} s, "
+                                   f"bringing it to the front.")
+                set_focus_elite_window()
         paused = monotonic() - start
         logger.info(f"Elite Dangerous active again - key input resumed after {paused:.1f} s.")
         self.ap_ckb('log', f"Elite active again - EDAP continues (paused {paused:.0f} s).")

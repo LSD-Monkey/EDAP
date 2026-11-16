@@ -1,3 +1,19 @@
+# 16/11/2026 v1.9.4 b51 - cargo not delivered: interdiction during the escape, line of sight, focus
+Session 2026-11-16: the bot never reached the sell station Rucker Enterprise twice.
+- FIX 12:44: the same NPC tried a 3rd interdiction while the ship charged the FSD to leave the system. The new
+  EDAP_Interdicted inside the interdiction handler was taken as a stop (it is an EDAP_Interrupt) and Waypoint Assist
+  stopped with the full hold. Now every further interdiction is handled and the escape jump is started again.
+- FIX 10:09: 'MOVE TO OBTAIN LINE OF SIGHT TO TARGET' was read 3x in the 'SUPERCRUISE ASSIST ACTIVE' region (the
+  line of sight region only showed the distance). The SCA could not drop, the ship flew past the station. The text
+  is now recognised in both regions (escape: pitch up, re-activate).
+- FIX 10:09-11:08: Elite was not the active window, the SC Assist monitor waited silently for 58 min while the ship
+  flew 1.8 million Ls away. NEW 'RefocusEliteAfter' (60 s): during an assist EDAP brings Elite to the front itself
+  (also when keys wait for the focus). 0 = wait for a click into Elite as before.
+- FIX distances with thousands separators: '1,780,674Ls' was read as 780.674 Ls (the approach watchdog then saw
+  'no progress' while the ship came closer).
+- FIX Spansh: the trade search asked for 1 day instead of the set max. age, so the loaded area (5 h) was not used
+  and every commodity was searched again (56 s, 'price too old 5827').
+
 # 16/11/2026 v1.9.4 b50 - Spansh as market data source
 The Ardent Insight API no longer delivered data, the Trade tab found no routes.
 - NEW market data from Spansh (spansh.co.uk station search), setting 'TradeDataSource' (default 'Spansh'). The trade
